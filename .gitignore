@@ -1,1 +1,5 @@
 .air
+firmware/build/
+firmware/sdkconfig
+firmware/sdkconfig.old
+.cache
