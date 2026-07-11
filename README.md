@@ -6,6 +6,8 @@ and machine learning.
 
 Secondary Goal: Learn AWS ML-Ops.
 
+✨Written by LLMs; each line lovingly reviewered by hand.
+
 ## Project Architecture
 ### IOT Device
 - M5Stack M5StickS3 with ESP32-S3 and BMI270 IMU
