@@ -1,0 +1,2 @@
+# Copy to terraform.tfvars and replace with a long, stable random value.
+wmews_api_secret = "replace-with-a-long-random-secret"

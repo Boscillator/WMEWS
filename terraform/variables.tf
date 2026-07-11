@@ -42,3 +42,14 @@ variable "raw_data_bucket_prefix" {
     error_message = "raw_data_bucket_prefix must use lowercase letters, numbers, and hyphens, start and end with an alphanumeric character, and be at most 54 characters."
   }
 }
+
+variable "wmews_api_secret" {
+  description = "Shared secret required by devices calling the ingest API."
+  type        = string
+  sensitive   = true
+
+  validation {
+    condition     = length(trimspace(var.wmews_api_secret)) > 0
+    error_message = "wmews_api_secret must not be blank."
+  }
+}

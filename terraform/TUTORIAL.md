@@ -25,6 +25,23 @@ Either export `AWS_PROFILE=wmews` or pass `-var='aws_region=us-east-1'` and use
 your usual AWS credential environment variables. Choose the desired region by
 setting `aws_region` in a `terraform.tfvars` file or as a `-var` argument.
 
+Generate a long random device secret once and keep supplying that same value for
+later OpenTofu commands. Do not commit it. An ignored `terraform.tfvars` file
+is the most convenient local option: copy `terraform.tfvars.example` to
+`terraform.tfvars`, then replace its placeholder. A persistent
+`TF_VAR_wmews_api_secret` environment variable also works. The export below
+lasts only for the current shell, so set it again when using a new shell rather
+than generating a new one.
+
+```bash
+export TF_VAR_wmews_api_secret="$(openssl rand -hex 32)"
+```
+
+OpenTofu records this sensitive input in state so it can detect infrastructure
+changes. `sensitive` hides it from normal CLI output but does not encrypt it;
+protect the local state file, or use encrypted remote state with restricted
+access before deploying for a team or production.
+
 ## Deploy
 
 From this directory, run the local configuration checks:
@@ -53,14 +70,27 @@ tofu output -raw raw_data_bucket_name
 tofu output -raw lambda_function_url
 ```
 
-Verify the current API contract after deployment:
+Verify the API and upload a small capture after deployment:
 
 ```bash
-curl "$(tofu output -raw lambda_function_url)upload-url"
+function_url="$(tofu output -raw lambda_function_url)"
+bucket="$(tofu output -raw raw_data_bucket_name)"
+response="$(curl -sS \
+  -H "X-WMEWS-Secret: $TF_VAR_wmews_api_secret" \
+  -H "X-WMEWS-Device-Id: 42" \
+  "${function_url}upload-url")"
+printf '%s\n' "$response"
+
+upload_url="$(printf '%s' "$response" | jq -r '.upload_url')"
+object_key="$(printf '%s' "$response" | jq -r '.object_key')"
+printf 'test capture\n' > /tmp/wmews-smoke.washcap
+curl -sS -X PUT -H 'Content-Type: application/octet-stream' \
+  --upload-file /tmp/wmews-smoke.washcap "$upload_url"
+aws s3api head-object --bucket "$bucket" --key "$object_key"
 ```
 
-The Function URL is intentionally public in this scaffold. Use IAM
-authorization or API Gateway before exposing device traffic in production.
+The Function URL is intentionally public and uses a shared secret only as an
+interim control. Use stronger per-device authentication before production.
 
 ## Update And Teardown
 

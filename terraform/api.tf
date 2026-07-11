@@ -48,7 +48,8 @@ resource "aws_lambda_function" "ingest_api" {
 
   environment {
     variables = {
-      RAW_DATA_BUCKET = aws_s3_bucket.raw_data.bucket
+      RAW_DATA_BUCKET  = aws_s3_bucket.raw_data.bucket
+      WMEWS_API_SECRET = var.wmews_api_secret
     }
   }
 }
