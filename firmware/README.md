@@ -1,7 +1,8 @@
 # ESP32-S3 Firmware
 
-This is a minimal ESP-IDF application for the ESP32-S3 development board. It
-logs a hello-world message once per second after boot.
+This ESP-IDF application provisions Wi-Fi and device credentials into the
+default NVS partition, connects as a Wi-Fi station, synchronizes with
+`pool.ntp.org`, and logs the UTC time.
 
 ## First-time setup
 
@@ -26,6 +27,19 @@ environment. Repeat the activation command in each new shell.
 . ./esp-idf/export.sh
 ```
 
+## Provision credentials
+
+From this directory, copy the tracked template to the ignored local file and
+replace every placeholder. Do not commit `config.csv`.
+
+```sh
+cp config.csv.example config.csv
+```
+
+The required keys are `ssid`, `password`, `device_id`, and `secret_key` in the
+`credentials` namespace. The application loads all four values, but only uses
+the SSID and password for Wi-Fi; it never logs credential values.
+
 ## Build
 
 From this directory, build the firmware. The tracked defaults select the
@@ -34,6 +48,22 @@ From this directory, build the firmware. The tracked defaults select the
 ```sh
 idf.py build
 ```
+
+The build generates an NVS image from the local `config.csv`. A missing local
+CSV intentionally fails the build to avoid compiling credentials into the
+application image.
+
+## Update credentials only
+
+After changing `config.csv`, build and flash only the NVS partition:
+
+```sh
+idf.py build
+idf.py -p <serial-port> nvs-flash
+```
+
+`nvs-flash` updates only the generated NVS image. A normal `flash` also writes
+the application and reprovisions NVS from `config.csv`.
 
 ## Flash and monitor
 
@@ -44,10 +74,12 @@ open the serial monitor:
 idf.py -p <serial-port> flash monitor
 ```
 
-Exit the monitor with `Ctrl+]`. The log includes:
+Exit the monitor with `Ctrl+]`. With valid Wi-Fi access and NTP reachability,
+the log includes an assigned DHCP address and synchronized UTC time:
 
 ```text
-I (...) wmews: Hello from the WMEWS ESP32-S3 firmware!
+I (...) network: Wi-Fi connected; IPv4 address: 192.0.2.10
+I (...) wmews: Synchronized UTC time: 2026-07-11T12:34:56Z
 ```
 
 ## Clean rebuild

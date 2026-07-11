@@ -1,5 +1,7 @@
 .air
 firmware/build/
+firmware/config.csv
+firmware/config.csv.bin
 firmware/sdkconfig
 firmware/sdkconfig.old
 .cache

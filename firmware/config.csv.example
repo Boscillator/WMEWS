@@ -1,0 +1,6 @@
+key,type,encoding,value
+credentials,namespace,,
+ssid,data,string,replace-with-wifi-ssid
+password,data,string,replace-with-wifi-password
+device_id,data,string,replace-with-device-id
+secret_key,data,string,replace-with-secret-key
