@@ -44,6 +44,21 @@ typedef struct {
 
 typedef struct bmi270_handle bmi270_handle_t;
 
+/** Return the dummy reported sample rate in Hz, not the configured scheduling rate, or 0 when null. */
+uint32_t bmi270_get_sample_rate_hz(const bmi270_handle_t *handle);
+
+/** Return the dummy sensor-time delta in microseconds, or 0 when `handle` is null. */
+uint32_t bmi270_get_sensor_time_dt_us(const bmi270_handle_t *handle);
+
+/** Return the dummy raw gyroscope LSB scale factor, or 0.0F when `handle` is null. */
+float bmi270_get_gyro_lsb(const bmi270_handle_t *handle);
+
+/** Return the dummy raw accelerometer LSB scale factor, or 0.0F when `handle` is null. */
+float bmi270_get_accel_lsb(const bmi270_handle_t *handle);
+
+/** Return the dummy raw temperature LSB scale factor, or 0.0F when `handle` is null. */
+float bmi270_get_temperature_lsb(const bmi270_handle_t *handle);
+
 /**
  * Create a dummy BMI270 handle. `config` and `handle` must be non-null; on failure `*handle` is null.
  * Handles are not safe for simultaneous access by multiple tasks.

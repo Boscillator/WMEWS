@@ -11,8 +11,19 @@
 
 static const char *TAG = "bmi270";
 
+static const uint32_t DUMMY_SAMPLE_RATE_HZ = 100U;
+static const uint32_t DUMMY_SENSOR_TIME_DT_US = 10000U;
+static const float DUMMY_GYRO_LSB = 1.0F;
+static const float DUMMY_ACCEL_LSB = 1.0F;
+static const float DUMMY_TEMPERATURE_LSB = 1.0F;
+
 struct bmi270_handle {
     bmi270_config_t config;
+    uint32_t sample_rate_hz;
+    uint32_t sensor_time_dt_us;
+    float gyro_lsb;
+    float accel_lsb;
+    float temperature_lsb;
     bool any_motion_enabled;
     uint32_t sensor_time;
     uint32_t random_state;
@@ -67,10 +78,40 @@ bmi270_error_t bmi270_open(const bmi270_config_t *config, bmi270_handle_t **hand
     }
 
     new_handle->config = *config;
+    new_handle->sample_rate_hz = DUMMY_SAMPLE_RATE_HZ;
+    new_handle->sensor_time_dt_us = DUMMY_SENSOR_TIME_DT_US;
+    new_handle->gyro_lsb = DUMMY_GYRO_LSB;
+    new_handle->accel_lsb = DUMMY_ACCEL_LSB;
+    new_handle->temperature_lsb = DUMMY_TEMPERATURE_LSB;
     new_handle->random_state = UINT32_C(0x27027027) ^ config->sample_rate_hz;
     *handle = new_handle;
     ESP_LOGI(TAG, "Open dummy backend: rate=%" PRIu32 "Hz", config->sample_rate_hz);
     return BMI270_OK;
+}
+
+uint32_t bmi270_get_sample_rate_hz(const bmi270_handle_t *handle)
+{
+    return handle == NULL ? 0U : handle->sample_rate_hz;
+}
+
+uint32_t bmi270_get_sensor_time_dt_us(const bmi270_handle_t *handle)
+{
+    return handle == NULL ? 0U : handle->sensor_time_dt_us;
+}
+
+float bmi270_get_gyro_lsb(const bmi270_handle_t *handle)
+{
+    return handle == NULL ? 0.0F : handle->gyro_lsb;
+}
+
+float bmi270_get_accel_lsb(const bmi270_handle_t *handle)
+{
+    return handle == NULL ? 0.0F : handle->accel_lsb;
+}
+
+float bmi270_get_temperature_lsb(const bmi270_handle_t *handle)
+{
+    return handle == NULL ? 0.0F : handle->temperature_lsb;
 }
 
 bmi270_error_t bmi270_read(bmi270_handle_t *handle, bmi270_data_t *samples, size_t capacity,
@@ -103,10 +144,7 @@ bmi270_error_t bmi270_read(bmi270_handle_t *handle, bmi270_data_t *samples, size
     }
 
     vTaskDelay(sample_delay_ticks(handle));
-    uint32_t sensor_time_increment = UINT32_C(1000000) / handle->config.sample_rate_hz;
-    if (sensor_time_increment == 0) {
-        sensor_time_increment = 1;
-    }
+    const uint32_t sensor_time_increment = handle->sensor_time_dt_us;
 
     for (size_t index = 0; index < capacity; ++index) {
         handle->sensor_time += sensor_time_increment;
