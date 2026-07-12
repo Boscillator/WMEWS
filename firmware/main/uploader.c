@@ -1,8 +1,7 @@
 #include "uploader.h"
 
 #include <stdbool.h>
-#include <limits.h>
-#include <stdio.h>
+#include <stdint.h>
 #include <string.h>
 #include <time.h>
 
@@ -37,6 +36,11 @@ struct uploader_context {
 static uploader_context_t s_context;
 static config_credentials_t s_credentials;
 static char s_upload_url[UPLOADER_HTTP_UPLOAD_URL_MAX_LENGTH + 1U];
+static uploader_http_upload_session_t s_upload_session;
+
+typedef struct {
+    size_t length;
+} counting_writer_context_t;
 
 static bool format_utc_timestamp(char *timestamp, size_t timestamp_size)
 {
@@ -51,20 +55,20 @@ static bool format_utc_timestamp(char *timestamp, size_t timestamp_size)
     return true;
 }
 
-static bool printf_writer(const uint8_t *bytes, size_t length, void *context)
+static bool counting_writer(const uint8_t *bytes, size_t length, void *context)
 {
-    (void)context;
-    if (bytes == NULL || length > (size_t)INT_MAX) {
-        ESP_LOGE(TAG, "stdout writer received invalid output length");
+    counting_writer_context_t *const counter = context;
+    if (counter == NULL || bytes == NULL || length > SIZE_MAX - counter->length) {
+        ESP_LOGE(TAG, "Counting writer received invalid output length");
         return false;
     }
-
-    const int written = printf("%.*s", (int)length, (const char *)bytes);
-    if (written != (int)length) {
-        ESP_LOGE(TAG, "stdout writer failed: wrote %d of %u bytes", written, (unsigned)length);
-        return false;
-    }
+    counter->length += length;
     return true;
+}
+
+static bool http_writer(const uint8_t *bytes, size_t length, void *context)
+{
+    return uploader_http_upload_write(context, bytes, length) == UPLOADER_HTTP_OK;
 }
 
 static bool flush_output_buffer(uploader_context_t *context)
@@ -116,11 +120,40 @@ static bool buffered_writer(const uint8_t *bytes, size_t length, void *context)
     return true;
 }
 
-static void initialize_output_buffer(uploader_context_t *context)
+static void initialize_output_buffer(uploader_context_t *context, uploader_json_writer_t transport_writer,
+                                     void *transport_context)
 {
     context->output_length = 0U;
-    context->transport_writer = printf_writer;
-    context->transport_context = NULL;
+    context->transport_writer = transport_writer;
+    context->transport_context = transport_context;
+}
+
+static uploader_json_error_t emit_capture(const acceleration_window_t *window,
+                                          const uploader_json_metadata_t *metadata, const char *end_time,
+                                          uploader_json_writer_t writer, void *writer_context)
+{
+    uploader_json_error_t result = uploader_json_emit_header(metadata, writer, writer_context);
+    if (result != UPLOADER_JSON_OK) {
+        ESP_LOGE(TAG, "Header emission failed: %d", result);
+        return result;
+    }
+
+    for (size_t index = 0U; index < window->count; ++index) {
+        result = uploader_json_emit_sample(&window->samples[index], writer, writer_context);
+        if (result != UPLOADER_JSON_OK) {
+            ESP_LOGE(TAG, "Sample %u emission failed: %d", (unsigned)index, result);
+            return result;
+        }
+        if ((index + 1U) % SERIAL_YIELD_INTERVAL_SAMPLES == 0U) {
+            vTaskDelay(SERIAL_YIELD_TICKS);
+        }
+    }
+
+    result = uploader_json_emit_footer(end_time, writer, writer_context);
+    if (result != UPLOADER_JSON_OK) {
+        ESP_LOGE(TAG, "Footer emission failed: %d", result);
+    }
+    return result;
 }
 
 static void return_window_or_retry(const uploader_context_t *context, const acceleration_window_t *window)
@@ -149,23 +182,11 @@ static void uploader_task(void *argument)
             continue;
         }
 
-        const config_err_t config_result = config_load_credentials(&s_credentials);
-        if (config_result != CONFIG_OK) {
-            ESP_LOGE(TAG, "Upload URL configuration failed: %d", config_result);
-        } else {
-            const uploader_http_error_t http_result =
-                uploader_http_get_upload_url(&s_credentials, s_upload_url, sizeof(s_upload_url));
-            if (http_result == UPLOADER_HTTP_OK) {
-                ESP_LOGI(TAG, "Pre-signed upload URL: %s", s_upload_url);
-            } else {
-                ESP_LOGE(TAG, "Upload URL request failed: %d", http_result);
-            }
-        }
-
         char start_time[sizeof("YYYY-MM-DDTHH:MM:SSZ")];
+        char end_time[sizeof("YYYY-MM-DDTHH:MM:SSZ")];
         const esp_app_desc_t *app_description = esp_app_get_description();
         if (!format_utc_timestamp(start_time, sizeof(start_time)) || app_description == NULL ||
-            app_description->version[0] == '\0') {
+            app_description->version[0] == '\0' || !format_utc_timestamp(end_time, sizeof(end_time))) {
             ESP_LOGE(TAG, "Could not prepare stream header metadata");
             return_window_or_retry(context, &window);
             continue;
@@ -176,37 +197,53 @@ static void uploader_task(void *argument)
             .firmware_version = app_description->version,
             .sample_rate_hz = window.sample_rate_hz,
         };
-        initialize_output_buffer(context);
+        counting_writer_context_t counter = {0};
         uploader_json_error_t json_result =
-            uploader_json_emit_header(&metadata, buffered_writer, context);
-        if (json_result != UPLOADER_JSON_OK) {
-            ESP_LOGE(TAG, "Header emission failed: %d", json_result);
+            emit_capture(&window, &metadata, end_time, counting_writer, &counter);
+        if (json_result != UPLOADER_JSON_OK || counter.length == 0U) {
+            ESP_LOGE(TAG, "Capture counting failed");
             return_window_or_retry(context, &window);
             continue;
         }
 
-        for (size_t index = 0; index < window.count; ++index) {
-            json_result = uploader_json_emit_sample(&window.samples[index], buffered_writer, context);
-            if (json_result != UPLOADER_JSON_OK) {
-                ESP_LOGE(TAG, "Sample %u emission failed: %d", (unsigned)index, json_result);
-                break;
-            }
-            if ((index + 1U) % SERIAL_YIELD_INTERVAL_SAMPLES == 0U) {
-                // UART writes are synchronous; let IDLE0 reset the task watchdog between batches.
-                vTaskDelay(SERIAL_YIELD_TICKS);
-            }
+        const config_err_t config_result = config_load_credentials(&s_credentials);
+        if (config_result != CONFIG_OK) {
+            ESP_LOGE(TAG, "Upload URL configuration failed: %d", config_result);
+            return_window_or_retry(context, &window);
+            continue;
+        }
+        uploader_http_error_t http_result =
+            uploader_http_get_upload_url(&s_credentials, s_upload_url, sizeof(s_upload_url));
+        if (http_result != UPLOADER_HTTP_OK) {
+            ESP_LOGE(TAG, "Upload URL request failed: %d", http_result);
+            return_window_or_retry(context, &window);
+            continue;
         }
 
-        if (json_result == UPLOADER_JSON_OK) {
-            char end_time[sizeof("YYYY-MM-DDTHH:MM:SSZ")];
-            if (format_utc_timestamp(end_time, sizeof(end_time))) {
-                json_result = uploader_json_emit_footer(end_time, buffered_writer, context);
-                if (json_result != UPLOADER_JSON_OK) {
-                    ESP_LOGE(TAG, "Footer emission failed: %d", json_result);
-                } else if (!flush_output_buffer(context)) {
-                    json_result = UPLOADER_JSON_ERR_WRITE;
-                    ESP_LOGE(TAG, "Final output flush failed: %d", json_result);
-                }
+        uploader_http_upload_init(&s_upload_session);
+        http_result = uploader_http_upload_start(&s_upload_session, s_upload_url, counter.length);
+        if (http_result != UPLOADER_HTTP_OK) {
+            ESP_LOGE(TAG, "Upload start failed: %d", http_result);
+            return_window_or_retry(context, &window);
+            continue;
+        }
+        ESP_LOGI(TAG, "Upload started: %u bytes", (unsigned)counter.length);
+
+        initialize_output_buffer(context, http_writer, &s_upload_session);
+        json_result = emit_capture(&window, &metadata, end_time, buffered_writer, context);
+        if (json_result == UPLOADER_JSON_OK && !flush_output_buffer(context)) {
+            json_result = UPLOADER_JSON_ERR_WRITE;
+            ESP_LOGE(TAG, "Final output flush failed: %d", json_result);
+        }
+        if (json_result != UPLOADER_JSON_OK) {
+            ESP_LOGE(TAG, "Upload serialization failed: %d", json_result);
+            uploader_http_upload_abort(&s_upload_session);
+        } else {
+            http_result = uploader_http_upload_finish(&s_upload_session);
+            if (http_result == UPLOADER_HTTP_OK) {
+                ESP_LOGI(TAG, "Upload completed: %u bytes", (unsigned)counter.length);
+            } else {
+                ESP_LOGE(TAG, "Upload failed: %d", http_result);
             }
         }
         return_window_or_retry(context, &window);

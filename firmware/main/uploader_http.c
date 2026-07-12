@@ -1,6 +1,7 @@
 #include "uploader_http.h"
 
 #include <stdbool.h>
+#include <limits.h>
 #include <stdio.h>
 #include <string.h>
 
@@ -14,7 +15,10 @@ enum {
     REQUEST_URL_SIZE = CONFIG_LAMBDA_URL_MAX_LENGTH + sizeof("/upload-url"),
     RESPONSE_BUFFER_SIZE = UPLOADER_HTTP_UPLOAD_URL_MAX_LENGTH + 1U,
     HTTP_TIMEOUT_MS = 10000U,
+    /* SigV4 query parameters require a request line larger than the HTTP default. */
+    UPLOAD_REQUEST_BUFFER_SIZE = UPLOADER_HTTP_UPLOAD_URL_MAX_LENGTH + 512U,
 };
+static const char *const UPLOAD_CONTENT_TYPE = "application/octet-stream";
 
 typedef struct {
     char data[RESPONSE_BUFFER_SIZE];
@@ -60,6 +64,129 @@ static bool is_valid_string(const char *value, size_t value_size)
 
     const size_t length = strnlen(value, value_size);
     return length > 0U && length < value_size;
+}
+
+void uploader_http_upload_init(uploader_http_upload_session_t *session)
+{
+    if (session != NULL) {
+        memset(session, 0, sizeof(*session));
+    }
+}
+
+void uploader_http_upload_abort(uploader_http_upload_session_t *session)
+{
+    if (session == NULL || session->client == NULL) {
+        return;
+    }
+
+    esp_http_client_close(session->client);
+    esp_http_client_cleanup(session->client);
+    session->client = NULL;
+    session->content_length = 0U;
+    session->bytes_written = 0U;
+}
+
+uploader_http_error_t uploader_http_upload_start(uploader_http_upload_session_t *session,
+                                                 const char *upload_url, size_t content_length)
+{
+    if (session == NULL || upload_url == NULL || strncmp(upload_url, "https://", 8U) != 0 ||
+        upload_url[8] == '\0' || content_length == 0U) {
+        ESP_LOGE(TAG, "Upload start failed: invalid URL or content length");
+        return UPLOADER_HTTP_ERR_INVALID_ARGUMENT;
+    }
+    if (session->client != NULL) {
+        ESP_LOGE(TAG, "Upload start failed: session is already active");
+        return UPLOADER_HTTP_ERR_INVALID_STATE;
+    }
+    if (content_length > INT_MAX) {
+        ESP_LOGE(TAG, "Upload start failed: content length exceeds HTTP client limit");
+        return UPLOADER_HTTP_ERR_CONTENT_LENGTH;
+    }
+
+    const esp_http_client_config_t config = {
+        .url = upload_url,
+        .method = HTTP_METHOD_PUT,
+        .timeout_ms = HTTP_TIMEOUT_MS,
+        .buffer_size_tx = UPLOAD_REQUEST_BUFFER_SIZE,
+        .crt_bundle_attach = esp_crt_bundle_attach,
+    };
+    session->client = esp_http_client_init(&config);
+    if (session->client == NULL) {
+        ESP_LOGE(TAG, "Upload start failed: could not initialize HTTP client");
+        return UPLOADER_HTTP_ERR_CLIENT_INITIALIZATION;
+    }
+
+    esp_err_t err = esp_http_client_set_header(session->client, "Content-Type", UPLOAD_CONTENT_TYPE);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "Upload start failed: could not set content type: %s", esp_err_to_name(err));
+        uploader_http_upload_abort(session);
+        return UPLOADER_HTTP_ERR_CLIENT_CONFIGURATION;
+    }
+    err = esp_http_client_open(session->client, (int)content_length);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "Upload start failed: could not open request: %s", esp_err_to_name(err));
+        uploader_http_upload_abort(session);
+        return UPLOADER_HTTP_ERR_OPEN;
+    }
+
+    session->content_length = content_length;
+    session->bytes_written = 0U;
+    return UPLOADER_HTTP_OK;
+}
+
+uploader_http_error_t uploader_http_upload_write(uploader_http_upload_session_t *session,
+                                                 const uint8_t *bytes, size_t length)
+{
+    if (session == NULL || session->client == NULL) {
+        ESP_LOGE(TAG, "Upload write failed: inactive session");
+        return UPLOADER_HTTP_ERR_INVALID_STATE;
+    }
+    if (bytes == NULL || length == 0U || length > session->content_length - session->bytes_written) {
+        ESP_LOGE(TAG, "Upload write failed: invalid fragment");
+        return UPLOADER_HTTP_ERR_INVALID_ARGUMENT;
+    }
+
+    size_t offset = 0U;
+    while (offset < length) {
+        const size_t remaining = length - offset;
+        const int requested = remaining > INT_MAX ? INT_MAX : (int)remaining;
+        const int written = esp_http_client_write(session->client, (const char *)bytes + offset, requested);
+        if (written <= 0 || written > requested) {
+            ESP_LOGE(TAG, "Upload write failed: HTTP client accepted %d bytes", written);
+            return UPLOADER_HTTP_ERR_WRITE;
+        }
+        offset += (size_t)written;
+        session->bytes_written += (size_t)written;
+    }
+    return UPLOADER_HTTP_OK;
+}
+
+uploader_http_error_t uploader_http_upload_finish(uploader_http_upload_session_t *session)
+{
+    if (session == NULL || session->client == NULL) {
+        ESP_LOGE(TAG, "Upload finish failed: inactive session");
+        return UPLOADER_HTTP_ERR_INVALID_STATE;
+    }
+    if (session->bytes_written != session->content_length) {
+        ESP_LOGE(TAG, "Upload finish failed: wrote %u of %u bytes", (unsigned)session->bytes_written,
+                 (unsigned)session->content_length);
+        uploader_http_upload_abort(session);
+        return UPLOADER_HTTP_ERR_CONTENT_LENGTH;
+    }
+
+    const int64_t response_length = esp_http_client_fetch_headers(session->client);
+    if (response_length < 0) {
+        ESP_LOGE(TAG, "Upload finish failed: could not fetch response headers");
+        uploader_http_upload_abort(session);
+        return UPLOADER_HTTP_ERR_RESPONSE_FETCH;
+    }
+    const int status_code = esp_http_client_get_status_code(session->client);
+    uploader_http_upload_abort(session);
+    if (status_code < 200 || status_code >= 300) {
+        ESP_LOGE(TAG, "Upload finish failed: HTTP status %d", status_code);
+        return UPLOADER_HTTP_ERR_HTTP_STATUS;
+    }
+    return UPLOADER_HTTP_OK;
 }
 
 uploader_http_error_t uploader_http_get_upload_url(const config_credentials_t *credentials,
