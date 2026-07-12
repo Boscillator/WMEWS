@@ -4,9 +4,13 @@
 #include "esp_netif_sntp.h"
 #include "nvs_flash.h"
 
+#include "bmi270.h"
+#include "data_recorder.h"
 #include "network.h"
+#include "uploader.h"
 
 static const char *TAG = "wmews";
+static bmi270_handle_t *s_bmi270;
 
 #define SNTP_SYNC_RETRIES 5
 #define SNTP_SYNC_WAIT_MS 2000
@@ -74,4 +78,44 @@ void app_main(void)
         return;
     }
     ESP_LOGI(TAG, "Synchronized UTC time: %s", timestamp);
+
+    const bmi270_config_t sensor_config = BMI270_DEFAULT_CONFIG();
+    const bmi270_error_t sensor_result = bmi270_open(&sensor_config, &s_bmi270);
+    if (sensor_result != BMI270_OK) {
+        ESP_LOGE(TAG, "BMI270 initialization failed: %d", sensor_result);
+        return;
+    }
+
+    uploader_handoff_t handoff;
+    data_recorder_error_t recorder_result = data_recorder_initialize(&handoff);
+    if (recorder_result != DATA_RECORDER_OK) {
+        ESP_LOGE(TAG, "Recorder initialization failed: %d", recorder_result);
+        (void)bmi270_close(s_bmi270);
+        s_bmi270 = NULL;
+        return;
+    }
+
+    uploader_context_t *uploader;
+    uploader_error_t uploader_result = uploader_initialize(&handoff, &uploader);
+    if (uploader_result != UPLOADER_OK) {
+        ESP_LOGE(TAG, "Uploader initialization failed: %d", uploader_result);
+        (void)bmi270_close(s_bmi270);
+        s_bmi270 = NULL;
+        return;
+    }
+    uploader_result = uploader_start(uploader);
+    if (uploader_result != UPLOADER_OK) {
+        ESP_LOGE(TAG, "Uploader startup failed: %d", uploader_result);
+        (void)bmi270_close(s_bmi270);
+        s_bmi270 = NULL;
+        return;
+    }
+
+    recorder_result = data_recorder_start(s_bmi270, &handoff);
+    if (recorder_result != DATA_RECORDER_OK) {
+        ESP_LOGE(TAG, "Recorder startup failed: %d", recorder_result);
+        (void)bmi270_close(s_bmi270);
+        s_bmi270 = NULL;
+        return;
+    }
 }
