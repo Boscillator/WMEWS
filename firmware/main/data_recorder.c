@@ -21,7 +21,7 @@ typedef struct recorder_context {
     bmi270_handle_t *sensor;
     uploader_handoff_t handoff;
     size_t window_capacity;
-    float accel_lsb;
+    uint32_t sample_rate_hz;
     bool initialized;
     bool started;
 } recorder_context_t;
@@ -42,7 +42,7 @@ static void recorder_task(void *argument)
 
         window.count = 0U;
         window.capacity = context->window_capacity;
-        window.accel_lsb = context->accel_lsb;
+        window.sample_rate_hz = context->sample_rate_hz;
 
         while (window.count < window.capacity) {
             const size_t remaining = window.capacity - window.count;
@@ -113,7 +113,7 @@ data_recorder_error_t data_recorder_initialize(uploader_handoff_t *handoff)
             .samples = s_window_storage[index],
             .count = 0U,
             .capacity = WINDOW_MAX_SAMPLES,
-            .accel_lsb = 0.0F,
+            .sample_rate_hz = 0U,
         };
         if (xQueueSend(free_queue, &window, 0U) != pdPASS) {
             ESP_LOGE(TAG, "Initialize failed: could not seed free buffer queue");
@@ -150,7 +150,7 @@ data_recorder_error_t data_recorder_start(bmi270_handle_t *sensor, const uploade
 
     s_context.sensor = sensor;
     s_context.window_capacity = (size_t)sample_rate_hz * WINDOW_DURATION_SECONDS;
-    s_context.accel_lsb = bmi270_get_accel_lsb(sensor);
+    s_context.sample_rate_hz = sample_rate_hz;
     const BaseType_t result = xTaskCreate(recorder_task, "recorder", 4096U, &s_context, 5U, NULL);
     if (result != pdPASS) {
         ESP_LOGE(TAG, "Start failed: could not create task");

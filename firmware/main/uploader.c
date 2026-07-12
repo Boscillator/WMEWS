@@ -1,12 +1,16 @@
 #include "uploader.h"
 
-#include <inttypes.h>
-#include <math.h>
 #include <stdbool.h>
+#include <limits.h>
+#include <stdio.h>
+#include <time.h>
 
+#include "esp_app_desc.h"
 #include "esp_log.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+
+#include "uploader_json.h"
 
 static const char *TAG = "uploader";
 static const TickType_t RETURN_RETRY_TICKS = pdMS_TO_TICKS(1000);
@@ -18,6 +22,35 @@ struct uploader_context {
 };
 
 static uploader_context_t s_context;
+
+static bool format_utc_timestamp(char *timestamp, size_t timestamp_size)
+{
+    time_t now;
+    struct tm utc_time;
+
+    if (time(&now) == (time_t)-1 || gmtime_r(&now, &utc_time) == NULL ||
+        strftime(timestamp, timestamp_size, "%Y-%m-%dT%H:%M:%SZ", &utc_time) == 0U) {
+        ESP_LOGE(TAG, "Could not format UTC timestamp");
+        return false;
+    }
+    return true;
+}
+
+static bool printf_writer(const uint8_t *bytes, size_t length, void *context)
+{
+    (void)context;
+    if (bytes == NULL || length > (size_t)INT_MAX) {
+        ESP_LOGE(TAG, "stdout writer received invalid output length");
+        return false;
+    }
+
+    const int written = printf("%.*s", (int)length, (const char *)bytes);
+    if (written != (int)length) {
+        ESP_LOGE(TAG, "stdout writer failed: wrote %d of %u bytes", written, (unsigned)length);
+        return false;
+    }
+    return true;
+}
 
 static void return_window_or_retry(const uploader_context_t *context, const acceleration_window_t *window)
 {
@@ -36,25 +69,54 @@ static void uploader_task(void *argument)
             continue;
         }
 
-        if (window.samples == NULL || window.count == 0U || window.count > window.capacity) {
-            ESP_LOGE(TAG, "Received invalid window: samples=%p count=%u capacity=%u",
-                     (void *)window.samples, (unsigned)window.count, (unsigned)window.capacity);
+        if (window.samples == NULL || window.count == 0U || window.count > window.capacity ||
+            window.sample_rate_hz == 0U) {
+            ESP_LOGE(TAG, "Received invalid window: samples=%p count=%u capacity=%u rate=%uHz",
+                     (void *)window.samples, (unsigned)window.count, (unsigned)window.capacity,
+                     (unsigned)window.sample_rate_hz);
             return_window_or_retry(context, &window);
             continue;
         }
 
-        uint64_t sum_of_squares = 0U;
-        for (size_t index = 0; index < window.count; ++index) {
-            const int64_t x = window.samples[index].accel_x;
-            const int64_t y = window.samples[index].accel_y;
-            const int64_t z = window.samples[index].accel_z;
-            sum_of_squares += (uint64_t)(x * x + y * y + z * z);
+        char start_time[sizeof("YYYY-MM-DDTHH:MM:SSZ")];
+        const esp_app_desc_t *app_description = esp_app_get_description();
+        if (!format_utc_timestamp(start_time, sizeof(start_time)) || app_description == NULL ||
+            app_description->version[0] == '\0') {
+            ESP_LOGE(TAG, "Could not prepare stream header metadata");
+            return_window_or_retry(context, &window);
+            continue;
         }
 
-        const double rms_raw = sqrt((double)sum_of_squares / (double)window.count);
-        const double rms_scaled = rms_raw * (double)window.accel_lsb;
-        ESP_LOGI(TAG, "Window samples=%u RMS=%.3f raw, %.3f scaled", (unsigned)window.count,
-                 rms_raw, rms_scaled);
+        const uploader_json_metadata_t metadata = {
+            .start_time = start_time,
+            .firmware_version = app_description->version,
+            .sample_rate_hz = window.sample_rate_hz,
+        };
+        uploader_json_error_t json_result =
+            uploader_json_emit_header(&metadata, printf_writer, NULL);
+        if (json_result != UPLOADER_JSON_OK) {
+            ESP_LOGE(TAG, "Header emission failed: %d", json_result);
+            return_window_or_retry(context, &window);
+            continue;
+        }
+
+        for (size_t index = 0; index < window.count; ++index) {
+            json_result = uploader_json_emit_sample(&window.samples[index], printf_writer, NULL);
+            if (json_result != UPLOADER_JSON_OK) {
+                ESP_LOGE(TAG, "Sample %u emission failed: %d", (unsigned)index, json_result);
+                break;
+            }
+        }
+
+        if (json_result == UPLOADER_JSON_OK) {
+            char end_time[sizeof("YYYY-MM-DDTHH:MM:SSZ")];
+            if (format_utc_timestamp(end_time, sizeof(end_time))) {
+                json_result = uploader_json_emit_footer(end_time, printf_writer, NULL);
+                if (json_result != UPLOADER_JSON_OK) {
+                    ESP_LOGE(TAG, "Footer emission failed: %d", json_result);
+                }
+            }
+        }
         return_window_or_retry(context, &window);
     }
 }

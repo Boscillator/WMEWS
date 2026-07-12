@@ -29,7 +29,8 @@ typedef struct {
     acceleration_sample_t *samples;
     size_t count;
     size_t capacity;
-    float accel_lsb;
+    /** Recorder-owned acquisition metadata that travels with the sample buffer. */
+    uint32_t sample_rate_hz;
 } acceleration_window_t;
 
 typedef struct {

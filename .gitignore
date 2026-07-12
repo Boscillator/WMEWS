@@ -1,5 +1,6 @@
 .air
 firmware/build/
+firmware/managed_components/
 firmware/config.csv
 firmware/config.csv.bin
 firmware/sdkconfig
