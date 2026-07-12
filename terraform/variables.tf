@@ -32,6 +32,17 @@ variable "lambda_timeout" {
   }
 }
 
+variable "lambda_reserved_concurrent_executions" {
+  description = "Maximum concurrent executions reserved for the ingest Lambda to limit billing exposure."
+  type        = number
+  default     = 2
+
+  validation {
+    condition     = var.lambda_reserved_concurrent_executions >= 1
+    error_message = "lambda_reserved_concurrent_executions must be at least 1."
+  }
+}
+
 variable "raw_data_bucket_prefix" {
   description = "Prefix for the private raw-data bucket; an eight-character hex suffix is added."
   type        = string

@@ -35,16 +35,17 @@ resource "aws_iam_role_policy" "lambda_s3_write" {
 }
 
 resource "aws_lambda_function" "ingest_api" {
-  function_name    = var.lambda_function_name
-  description      = "WMEWS FastAPI ingest endpoint"
-  role             = aws_iam_role.lambda.arn
-  runtime          = "python3.11"
-  architectures    = ["x86_64"]
-  handler          = "main.handler"
-  filename         = data.archive_file.lambda.output_path
-  source_code_hash = data.archive_file.lambda.output_base64sha256
-  memory_size      = var.lambda_memory_size
-  timeout          = var.lambda_timeout
+  function_name                  = var.lambda_function_name
+  description                    = "WMEWS FastAPI ingest endpoint"
+  role                           = aws_iam_role.lambda.arn
+  runtime                        = "python3.11"
+  architectures                  = ["x86_64"]
+  handler                        = "main.handler"
+  filename                       = data.archive_file.lambda.output_path
+  source_code_hash               = data.archive_file.lambda.output_base64sha256
+  memory_size                    = var.lambda_memory_size
+  timeout                        = var.lambda_timeout
+  reserved_concurrent_executions = var.lambda_reserved_concurrent_executions
 
   environment {
     variables = {
