@@ -46,6 +46,16 @@ static TickType_t sample_delay_ticks(const bmi270_handle_t *handle)
     return ticks == 0 ? 1 : ticks;
 }
 
+static void delay_for_samples(const bmi270_handle_t *handle, size_t sample_count)
+{
+    const TickType_t sample_ticks = sample_delay_ticks(handle);
+
+    // Keep generated samples aligned with the configured sample rate, including batch reads.
+    for (size_t index = 0; index < sample_count; ++index) {
+        vTaskDelay(sample_ticks);
+    }
+}
+
 static int16_t random_noise(bmi270_handle_t *handle, int16_t magnitude)
 {
     handle->random_state = handle->random_state * UINT32_C(1664525) + UINT32_C(1013904223);
@@ -132,18 +142,20 @@ bmi270_error_t bmi270_read(bmi270_handle_t *handle, bmi270_data_t *samples, size
         return BMI270_ERR_INVALID_ARGUMENT;
     }
 
-    ESP_LOGI(TAG, "Read dummy FIFO: capacity=%u timeout=%" PRIu32 "ms", (unsigned)capacity, timeout_ms);
+    // ESP_LOGI(TAG, "Read dummy FIFO: capacity=%u timeout=%" PRIu32 "ms", (unsigned)capacity, timeout_ms);
     if (capacity == 0) {
         return BMI270_OK;
     }
 
-    uint32_t interval_ms = sample_period_ms(handle);
-    if (timeout_ms != 0 && timeout_ms < interval_ms) {
-        ESP_LOGE(TAG, "Read timed out before dummy sample interval (%" PRIu32 "ms)", interval_ms);
+    const uint32_t interval_ms = sample_period_ms(handle);
+    const uint64_t required_wait_ms = (uint64_t)interval_ms * capacity;
+    if (timeout_ms != 0U && (uint64_t)timeout_ms < required_wait_ms) {
+        ESP_LOGE(TAG, "Read timed out before %u dummy samples (%" PRIu64 "ms)",
+                 (unsigned)capacity, required_wait_ms);
         return BMI270_ERR_TIMEOUT;
     }
 
-    vTaskDelay(sample_delay_ticks(handle));
+    delay_for_samples(handle, capacity);
     const uint32_t sensor_time_increment = handle->sensor_time_dt_us;
 
     for (size_t index = 0; index < capacity; ++index) {

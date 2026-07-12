@@ -66,7 +66,7 @@ float bmi270_get_temperature_lsb(const bmi270_handle_t *handle);
 bmi270_error_t bmi270_open(const bmi270_config_t *config, bmi270_handle_t **handle);
 
 /**
- * Fill up to `capacity` samples after one simulated sample interval. `timeout_ms` of zero waits forever.
+ * Fill `capacity` samples at the configured simulated rate. `timeout_ms` of zero waits forever.
  * `samples_read` is required and is zeroed before any error after validation of that pointer.
  */
 bmi270_error_t bmi270_read(bmi270_handle_t *handle, bmi270_data_t *samples, size_t capacity,
