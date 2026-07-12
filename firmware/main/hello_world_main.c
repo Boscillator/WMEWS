@@ -11,10 +11,28 @@ static const char *TAG = "wmews";
 #define SNTP_SYNC_RETRIES 5
 #define SNTP_SYNC_WAIT_MS 2000
 
+static esp_err_t initialize_nvs(void)
+{
+    esp_err_t err = nvs_flash_init();
+    if (err != ESP_ERR_NVS_NO_FREE_PAGES && err != ESP_ERR_NVS_NEW_VERSION_FOUND) {
+        return err;
+    }
+
+    ESP_LOGW(TAG, "NVS is full or incompatible; erasing it before retrying initialization");
+    err = nvs_flash_erase();
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "NVS erase failed: %s", esp_err_to_name(err));
+        return err;
+    }
+
+    ESP_LOGW(TAG, "NVS erased; device credentials must be reprovisioned");
+    return nvs_flash_init();
+}
+
 void app_main(void)
 {
     ESP_LOGD(TAG, "Initializing NVS");
-    esp_err_t err = nvs_flash_init();
+    esp_err_t err = initialize_nvs();
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "NVS initialization failed: %s", esp_err_to_name(err));
         return;
