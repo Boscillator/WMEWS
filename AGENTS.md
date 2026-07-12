@@ -18,4 +18,6 @@
 - Avoid allocation when possible
 - Think about syncronization and parrallelism explicitly
 - This is a battery powered device
+- Use const whenever possible
+- Write modern C11/C23
 
