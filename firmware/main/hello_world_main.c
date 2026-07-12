@@ -13,7 +13,7 @@ static const char *TAG = "wmews";
 static bmi270_handle_t *s_bmi270;
 
 #define SNTP_SYNC_RETRIES 5
-#define SNTP_SYNC_WAIT_MS 2000
+#define SNTP_SYNC_WAIT_MS 5000
 
 static esp_err_t initialize_nvs(void)
 {
@@ -61,7 +61,7 @@ void app_main(void)
             break;
         }
         if (attempt < SNTP_SYNC_RETRIES) {
-            ESP_LOGW(TAG, "Waiting for SNTP synchronization (%d/%d)", attempt, SNTP_SYNC_RETRIES);
+            ESP_LOGW(TAG, "Waiting for SNTP synchronization (%d/%d). Failed: %s", attempt, SNTP_SYNC_RETRIES, esp_err_to_name(err));
         }
     }
     if (err != ESP_OK) {

@@ -59,6 +59,9 @@ config_err_t config_load_credentials(config_credentials_t *credentials)
     if (result == CONFIG_OK) {
         result = load_string(handle, "secret_key", credentials->secret_key, sizeof(credentials->secret_key));
     }
+    if (result == CONFIG_OK) {
+        result = load_string(handle, "lambda_url", credentials->lambda_url, sizeof(credentials->lambda_url));
+    }
 
     nvs_close(handle);
     return result;

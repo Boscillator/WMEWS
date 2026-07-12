@@ -6,6 +6,7 @@
 #define CONFIG_PASSWORD_MAX_LENGTH 63
 #define CONFIG_DEVICE_ID_MAX_LENGTH 63
 #define CONFIG_SECRET_KEY_MAX_LENGTH 127
+#define CONFIG_LAMBDA_URL_MAX_LENGTH 255
 
 typedef enum {
     CONFIG_OK = 0,
@@ -21,6 +22,7 @@ typedef struct {
     char password[CONFIG_PASSWORD_MAX_LENGTH + 1];
     char device_id[CONFIG_DEVICE_ID_MAX_LENGTH + 1];
     char secret_key[CONFIG_SECRET_KEY_MAX_LENGTH + 1];
+    char lambda_url[CONFIG_LAMBDA_URL_MAX_LENGTH + 1];
 } config_credentials_t;
 
 /** Load and validate all required credentials from NVS. */

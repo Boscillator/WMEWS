@@ -10,10 +10,17 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 
+#include "config.h"
+#include "uploader_http.h"
 #include "uploader_json.h"
 
 static const char *TAG = "uploader";
 static const TickType_t RETURN_RETRY_TICKS = pdMS_TO_TICKS(1000);
+enum {
+    UPLOADER_TASK_STACK_SIZE = 8192U,
+    SERIAL_YIELD_INTERVAL_SAMPLES = 16U,
+};
+static const TickType_t SERIAL_YIELD_TICKS = 1U;
 
 struct uploader_context {
     uploader_handoff_t handoff;
@@ -22,6 +29,8 @@ struct uploader_context {
 };
 
 static uploader_context_t s_context;
+static config_credentials_t s_credentials;
+static char s_upload_url[UPLOADER_HTTP_UPLOAD_URL_MAX_LENGTH + 1U];
 
 static bool format_utc_timestamp(char *timestamp, size_t timestamp_size)
 {
@@ -78,6 +87,19 @@ static void uploader_task(void *argument)
             continue;
         }
 
+        const config_err_t config_result = config_load_credentials(&s_credentials);
+        if (config_result != CONFIG_OK) {
+            ESP_LOGE(TAG, "Upload URL configuration failed: %d", config_result);
+        } else {
+            const uploader_http_error_t http_result =
+                uploader_http_get_upload_url(&s_credentials, s_upload_url, sizeof(s_upload_url));
+            if (http_result == UPLOADER_HTTP_OK) {
+                ESP_LOGI(TAG, "Pre-signed upload URL: %s", s_upload_url);
+            } else {
+                ESP_LOGE(TAG, "Upload URL request failed: %d", http_result);
+            }
+        }
+
         char start_time[sizeof("YYYY-MM-DDTHH:MM:SSZ")];
         const esp_app_desc_t *app_description = esp_app_get_description();
         if (!format_utc_timestamp(start_time, sizeof(start_time)) || app_description == NULL ||
@@ -105,6 +127,10 @@ static void uploader_task(void *argument)
             if (json_result != UPLOADER_JSON_OK) {
                 ESP_LOGE(TAG, "Sample %u emission failed: %d", (unsigned)index, json_result);
                 break;
+            }
+            if ((index + 1U) % SERIAL_YIELD_INTERVAL_SAMPLES == 0U) {
+                // UART writes are synchronous; let IDLE0 reset the task watchdog between batches.
+                vTaskDelay(SERIAL_YIELD_TICKS);
             }
         }
 
@@ -145,7 +171,8 @@ uploader_error_t uploader_start(uploader_context_t *context)
         return UPLOADER_ERR_INVALID_STATE;
     }
 
-    const BaseType_t result = xTaskCreate(uploader_task, "uploader", 4096U, context, 5U, NULL);
+    const BaseType_t result =
+        xTaskCreate(uploader_task, "uploader", UPLOADER_TASK_STACK_SIZE, context, 5U, NULL);
     if (result != pdPASS) {
         ESP_LOGE(TAG, "Start failed: could not create task");
         return UPLOADER_ERR_TASK_CREATE_FAILED;

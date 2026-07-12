@@ -36,9 +36,10 @@ replace every placeholder. Do not commit `config.csv`.
 cp config.csv.example config.csv
 ```
 
-The required keys are `ssid`, `password`, `device_id`, and `secret_key` in the
-`credentials` namespace. The application loads all four values, but only uses
-the SSID and password for Wi-Fi; it never logs credential values.
+The required keys are `ssid`, `password`, `device_id`, `secret_key`, and
+`lambda_url` in the `credentials` namespace. `lambda_url` is the Lambda
+Function URL base endpoint used to request an upload URL. The application never
+logs secret credential values.
 
 ## Build
 

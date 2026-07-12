@@ -4,3 +4,4 @@ ssid,data,string,replace-with-wifi-ssid
 password,data,string,replace-with-wifi-password
 device_id,data,string,replace-with-device-id
 secret_key,data,string,replace-with-secret-key
+lambda_url,data,string,https://4yzhrw3xoq3ftlks3ec2vovzdm0xmrvg.lambda-url.us-east-1.on.aws/
