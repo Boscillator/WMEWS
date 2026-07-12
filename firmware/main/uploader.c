@@ -3,6 +3,7 @@
 #include <stdbool.h>
 #include <limits.h>
 #include <stdio.h>
+#include <string.h>
 #include <time.h>
 
 #include "esp_app_desc.h"
@@ -19,11 +20,16 @@ static const TickType_t RETURN_RETRY_TICKS = pdMS_TO_TICKS(1000);
 enum {
     UPLOADER_TASK_STACK_SIZE = 8192U,
     SERIAL_YIELD_INTERVAL_SAMPLES = 16U,
+    UPLOADER_OUTPUT_BUFFER_SIZE = 4096U
 };
 static const TickType_t SERIAL_YIELD_TICKS = 1U;
 
 struct uploader_context {
     uploader_handoff_t handoff;
+    uint8_t output_buffer[UPLOADER_OUTPUT_BUFFER_SIZE];
+    size_t output_length;
+    uploader_json_writer_t transport_writer;
+    void *transport_context;
     bool initialized;
     bool started;
 };
@@ -61,6 +67,62 @@ static bool printf_writer(const uint8_t *bytes, size_t length, void *context)
     return true;
 }
 
+static bool flush_output_buffer(uploader_context_t *context)
+{
+    if (context == NULL || context->transport_writer == NULL) {
+        ESP_LOGE(TAG, "Output buffer is not initialized");
+        return false;
+    }
+    if (context->output_length == 0U) {
+        return true;
+    }
+    if (!context->transport_writer(context->output_buffer, context->output_length,
+                                   context->transport_context)) {
+        ESP_LOGE(TAG, "Output buffer flush failed for %u bytes", (unsigned)context->output_length);
+        return false;
+    }
+
+    context->output_length = 0U;
+    return true;
+}
+
+static bool buffered_writer(const uint8_t *bytes, size_t length, void *context)
+{
+    uploader_context_t *const uploader = context;
+    if (uploader == NULL || bytes == NULL) {
+        ESP_LOGE(TAG, "Output buffer received invalid input");
+        return false;
+    }
+    if (length == 0U) {
+        return true;
+    }
+    if (length > sizeof(uploader->output_buffer)) {
+        if (!flush_output_buffer(uploader)) {
+            return false;
+        }
+        if (!uploader->transport_writer(bytes, length, uploader->transport_context)) {
+            ESP_LOGE(TAG, "Output transport rejected oversized %u byte fragment", (unsigned)length);
+            return false;
+        }
+        return true;
+    }
+    if (length > sizeof(uploader->output_buffer) - uploader->output_length &&
+        !flush_output_buffer(uploader)) {
+        return false;
+    }
+
+    memcpy(&uploader->output_buffer[uploader->output_length], bytes, length);
+    uploader->output_length += length;
+    return true;
+}
+
+static void initialize_output_buffer(uploader_context_t *context)
+{
+    context->output_length = 0U;
+    context->transport_writer = printf_writer;
+    context->transport_context = NULL;
+}
+
 static void return_window_or_retry(const uploader_context_t *context, const acceleration_window_t *window)
 {
     while (xQueueSend(context->handoff.free_queue, window, RETURN_RETRY_TICKS) != pdPASS) {
@@ -70,7 +132,7 @@ static void return_window_or_retry(const uploader_context_t *context, const acce
 
 static void uploader_task(void *argument)
 {
-    const uploader_context_t *context = argument;
+    uploader_context_t *const context = argument;
     acceleration_window_t window;
 
     for (;;) {
@@ -114,8 +176,9 @@ static void uploader_task(void *argument)
             .firmware_version = app_description->version,
             .sample_rate_hz = window.sample_rate_hz,
         };
+        initialize_output_buffer(context);
         uploader_json_error_t json_result =
-            uploader_json_emit_header(&metadata, printf_writer, NULL);
+            uploader_json_emit_header(&metadata, buffered_writer, context);
         if (json_result != UPLOADER_JSON_OK) {
             ESP_LOGE(TAG, "Header emission failed: %d", json_result);
             return_window_or_retry(context, &window);
@@ -123,7 +186,7 @@ static void uploader_task(void *argument)
         }
 
         for (size_t index = 0; index < window.count; ++index) {
-            json_result = uploader_json_emit_sample(&window.samples[index], printf_writer, NULL);
+            json_result = uploader_json_emit_sample(&window.samples[index], buffered_writer, context);
             if (json_result != UPLOADER_JSON_OK) {
                 ESP_LOGE(TAG, "Sample %u emission failed: %d", (unsigned)index, json_result);
                 break;
@@ -137,9 +200,12 @@ static void uploader_task(void *argument)
         if (json_result == UPLOADER_JSON_OK) {
             char end_time[sizeof("YYYY-MM-DDTHH:MM:SSZ")];
             if (format_utc_timestamp(end_time, sizeof(end_time))) {
-                json_result = uploader_json_emit_footer(end_time, printf_writer, NULL);
+                json_result = uploader_json_emit_footer(end_time, buffered_writer, context);
                 if (json_result != UPLOADER_JSON_OK) {
                     ESP_LOGE(TAG, "Footer emission failed: %d", json_result);
+                } else if (!flush_output_buffer(context)) {
+                    json_result = UPLOADER_JSON_ERR_WRITE;
+                    ESP_LOGE(TAG, "Final output flush failed: %d", json_result);
                 }
             }
         }
