@@ -1,8 +1,10 @@
 #include <time.h>
+#include <stdbool.h>
 
 #include "esp_log.h"
 #include "esp_netif_sntp.h"
 #include "nvs_flash.h"
+#include "driver/i2c_master.h"
 
 #include "bmi270.h"
 #include "data_recorder.h"
@@ -11,6 +13,7 @@
 
 static const char *TAG = "wmews";
 static bmi270_handle_t *s_bmi270;
+static i2c_master_bus_handle_t s_i2c_bus;
 
 #define SNTP_SYNC_RETRIES 5
 #define SNTP_SYNC_WAIT_MS 5000
@@ -31,6 +34,36 @@ static esp_err_t initialize_nvs(void)
 
     ESP_LOGW(TAG, "NVS erased; device credentials must be reprovisioned");
     return nvs_flash_init();
+}
+
+static esp_err_t initialize_i2c_bus(void)
+{
+    const i2c_master_bus_config_t config = {
+        .i2c_port = I2C_NUM_0,
+        .sda_io_num = GPIO_NUM_47,
+        .scl_io_num = GPIO_NUM_48,
+        .clk_source = I2C_CLK_SRC_DEFAULT,
+        .glitch_ignore_cnt = 7,
+        .flags.enable_internal_pullup = true,
+    };
+    const esp_err_t err = i2c_new_master_bus(&config, &s_i2c_bus);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "I2C bus initialization failed: %s", esp_err_to_name(err));
+    }
+    return err;
+}
+
+static void cleanup_sensor_bus(void)
+{
+    if (s_bmi270 != NULL) {
+        (void)bmi270_close(s_bmi270);
+        s_bmi270 = NULL;
+    }
+    if (s_i2c_bus != NULL) {
+        const esp_err_t err = i2c_del_master_bus(s_i2c_bus);
+        if (err != ESP_OK) ESP_LOGE(TAG, "I2C bus cleanup failed: %s", esp_err_to_name(err));
+        s_i2c_bus = NULL;
+    }
 }
 
 void app_main(void)
@@ -79,10 +112,15 @@ void app_main(void)
     }
     ESP_LOGI(TAG, "Synchronized UTC time: %s", timestamp);
 
-    const bmi270_config_t sensor_config = BMI270_DEFAULT_CONFIG();
+    if (initialize_i2c_bus() != ESP_OK) {
+        return;
+    }
+
+    const bmi270_config_t sensor_config = BMI270_DEFAULT_CONFIG(s_i2c_bus);
     const bmi270_error_t sensor_result = bmi270_open(&sensor_config, &s_bmi270);
     if (sensor_result != BMI270_OK) {
         ESP_LOGE(TAG, "BMI270 initialization failed: %d", sensor_result);
+        cleanup_sensor_bus();
         return;
     }
 
@@ -90,8 +128,7 @@ void app_main(void)
     data_recorder_error_t recorder_result = data_recorder_initialize(&handoff);
     if (recorder_result != DATA_RECORDER_OK) {
         ESP_LOGE(TAG, "Recorder initialization failed: %d", recorder_result);
-        (void)bmi270_close(s_bmi270);
-        s_bmi270 = NULL;
+        cleanup_sensor_bus();
         return;
     }
 
@@ -99,23 +136,20 @@ void app_main(void)
     uploader_error_t uploader_result = uploader_initialize(&handoff, &uploader);
     if (uploader_result != UPLOADER_OK) {
         ESP_LOGE(TAG, "Uploader initialization failed: %d", uploader_result);
-        (void)bmi270_close(s_bmi270);
-        s_bmi270 = NULL;
+        cleanup_sensor_bus();
         return;
     }
     uploader_result = uploader_start(uploader);
     if (uploader_result != UPLOADER_OK) {
         ESP_LOGE(TAG, "Uploader startup failed: %d", uploader_result);
-        (void)bmi270_close(s_bmi270);
-        s_bmi270 = NULL;
+        cleanup_sensor_bus();
         return;
     }
 
     recorder_result = data_recorder_start(s_bmi270, &handoff);
     if (recorder_result != DATA_RECORDER_OK) {
         ESP_LOGE(TAG, "Recorder startup failed: %d", recorder_result);
-        (void)bmi270_close(s_bmi270);
-        s_bmi270 = NULL;
+        cleanup_sensor_bus();
         return;
     }
 }
