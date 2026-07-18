@@ -14,6 +14,7 @@ static const char *TAG = "power";
 enum {
     REG_DEVICE_ID = 0x00,
     REG_WAKE_SRC = 0x05,
+    REG_PWR_CFG = 0x06,
     REG_HOLD_CFG = 0x07,
     REG_SYS_CMD = 0x0C,
     REG_GPIO_MODE = 0x10,
@@ -25,6 +26,7 @@ enum {
     PMIC_DEVICE_ID = 0x50,
     PMIC_DEVICE_MODEL = 0x20,
     PMIC_GPIO4_BIT = UINT8_C(1) << 4,
+    PMIC_STATUS_LED_BIT = UINT8_C(1) << 4,
     PMIC_GPIO4_PULL_MASK = UINT8_C(0x03),
     PMIC_SYS_CMD_POWEROFF = 0xA1,
     I2C_TIMEOUT_MS = 100,
@@ -186,6 +188,34 @@ power_error_t power_read_battery_mv(power_handle_t *handle, uint16_t *millivolts
     *millivolts = (uint16_t)bytes[0] | ((uint16_t)bytes[1] << 8);
     ESP_LOGD(TAG, "battery voltage: %" PRIu16 " mV", *millivolts);
     return POWER_OK;
+}
+
+power_error_t power_set_status_led(power_handle_t *handle, bool enabled)
+{
+    power_error_t result = validate_handle(handle, "status LED control");
+    if (result != POWER_OK) return result;
+
+    lock();
+    result = update_register(REG_PWR_CFG, PMIC_STATUS_LED_BIT,
+                             enabled ? PMIC_STATUS_LED_BIT : 0U);
+    unlock();
+    if (result == POWER_OK) ESP_LOGD(TAG, "status LED %s", enabled ? "on" : "off");
+    return result;
+}
+
+power_error_t power_flash_status_led(power_handle_t *handle, uint32_t duration_ms)
+{
+    if (duration_ms == 0U) {
+        ESP_LOGE(TAG, "status LED flash duration is zero");
+        return POWER_ERR_INVALID_ARGUMENT;
+    }
+
+    power_error_t result = power_set_status_led(handle, true);
+    if (result != POWER_OK) return result;
+
+    vTaskDelay(pdMS_TO_TICKS(duration_ms));
+    const power_error_t off_result = power_set_status_led(handle, false);
+    return off_result == POWER_OK ? POWER_OK : off_result;
 }
 
 power_error_t power_get_wake_sources(power_handle_t *handle, power_wake_flags_t *sources)

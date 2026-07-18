@@ -19,12 +19,14 @@ static const TickType_t RETURN_RETRY_TICKS = pdMS_TO_TICKS(1000);
 enum {
     UPLOADER_TASK_STACK_SIZE = 8192U,
     SERIAL_YIELD_INTERVAL_SAMPLES = 16U,
-    UPLOADER_OUTPUT_BUFFER_SIZE = 4096U
+    UPLOADER_OUTPUT_BUFFER_SIZE = 4096U,
+    UPLOAD_SUCCESS_FLASH_MS = 75U,
 };
 static const TickType_t SERIAL_YIELD_TICKS = 1U;
 
 struct uploader_context {
     uploader_handoff_t handoff;
+    power_handle_t *power;
     uint8_t output_buffer[UPLOADER_OUTPUT_BUFFER_SIZE];
     size_t output_length;
     uploader_json_writer_t transport_writer;
@@ -245,6 +247,9 @@ static void uploader_task(void *argument)
             http_result = uploader_http_upload_finish(&s_upload_session);
             if (http_result == UPLOADER_HTTP_OK) {
                 ESP_LOGI(TAG, "Upload completed: %u bytes", (unsigned)counter.length);
+                if (power_flash_status_led(context->power, UPLOAD_SUCCESS_FLASH_MS) != POWER_OK) {
+                    ESP_LOGE(TAG, "Upload-success LED flash failed");
+                }
             } else {
                 ESP_LOGE(TAG, "Upload failed: %d", http_result);
             }
@@ -253,9 +258,11 @@ static void uploader_task(void *argument)
     }
 }
 
-uploader_error_t uploader_initialize(const uploader_handoff_t *handoff, uploader_context_t **context)
+uploader_error_t uploader_initialize(const uploader_handoff_t *handoff, power_handle_t *power,
+                                     uploader_context_t **context)
 {
-    if (handoff == NULL || context == NULL || handoff->free_queue == NULL || handoff->ready_queue == NULL) {
+    if (handoff == NULL || power == NULL || context == NULL || handoff->free_queue == NULL ||
+        handoff->ready_queue == NULL) {
         ESP_LOGE(TAG, "Initialize failed: invalid handoff or output context");
         return UPLOADER_ERR_INVALID_ARGUMENT;
     }
@@ -265,6 +272,7 @@ uploader_error_t uploader_initialize(const uploader_handoff_t *handoff, uploader
     }
 
     s_context.handoff = *handoff;
+    s_context.power = power;
     s_context.initialized = true;
     *context = &s_context;
     return UPLOADER_OK;

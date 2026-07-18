@@ -6,6 +6,7 @@
 
 #include "freertos/FreeRTOS.h"
 #include "freertos/queue.h"
+#include "power.h"
 
 typedef enum {
     UPLOADER_OK = 0,
@@ -44,8 +45,9 @@ typedef struct {
 
 typedef struct uploader_context uploader_context_t;
 
-/** Initialize the single uploader instance using caller-owned ownership-transfer queues. */
-uploader_error_t uploader_initialize(const uploader_handoff_t *handoff, uploader_context_t **context);
+/** Initialize the single uploader instance using caller-owned queues and PMIC control. */
+uploader_error_t uploader_initialize(const uploader_handoff_t *handoff, power_handle_t *power,
+                                     uploader_context_t **context);
 
 /** Start the uploader task after successful initialization. */
 uploader_error_t uploader_start(uploader_context_t *context);

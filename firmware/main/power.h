@@ -1,5 +1,6 @@
 #pragma once
 
+#include <stdbool.h>
 #include <stdint.h>
 
 #include "driver/i2c_master.h"
@@ -54,6 +55,10 @@ typedef struct power_handle power_handle_t;
 power_error_t power_open(const power_config_t *config, power_handle_t **handle);
 /** Read the PMIC's battery-voltage register in millivolts. */
 power_error_t power_read_battery_mv(power_handle_t *handle, uint16_t *millivolts);
+/** Set the M5PM1-controlled board status LED. */
+power_error_t power_set_status_led(power_handle_t *handle, bool enabled);
+/** Turn the status LED on for duration_ms, then turn it off. */
+power_error_t power_flash_status_led(power_handle_t *handle, uint32_t duration_ms);
 /** Read the PMIC wake-source flags without clearing them. */
 power_error_t power_get_wake_sources(power_handle_t *handle, power_wake_flags_t *sources);
 /** Clear the selected PMIC wake-source flags (write-one-to-clear). */

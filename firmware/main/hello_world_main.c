@@ -5,6 +5,8 @@
 #include "esp_netif_sntp.h"
 #include "nvs_flash.h"
 #include "driver/i2c_master.h"
+#include "freertos/semphr.h"
+#include "freertos/task.h"
 
 #include "bmi270.h"
 #include "data_recorder.h"
@@ -16,9 +18,53 @@ static const char *TAG = "wmews";
 static bmi270_handle_t *s_bmi270;
 static power_handle_t *s_power;
 static i2c_master_bus_handle_t s_i2c_bus;
+static TaskHandle_t s_boot_led_task;
+static StaticSemaphore_t s_boot_led_stopped_storage;
+static SemaphoreHandle_t s_boot_led_stopped;
 
 #define SNTP_SYNC_RETRIES 5
 #define SNTP_SYNC_WAIT_MS 5000
+#define BOOT_LED_HALF_PERIOD_MS 100
+
+static void boot_led_task(void *argument)
+{
+    power_handle_t *const power = argument;
+    bool enabled = false;
+
+    for (;;) {
+        enabled = !enabled;
+        if (power_set_status_led(power, enabled) != POWER_OK) break;
+        if (ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(BOOT_LED_HALF_PERIOD_MS)) != 0U) break;
+    }
+
+    (void)power_set_status_led(power, false);
+    (void)xSemaphoreGive(s_boot_led_stopped);
+    vTaskDelete(NULL);
+}
+
+static bool start_boot_led(void)
+{
+    s_boot_led_stopped = xSemaphoreCreateBinaryStatic(&s_boot_led_stopped_storage);
+    if (s_boot_led_stopped == NULL) {
+        ESP_LOGE(TAG, "Boot LED completion semaphore initialization failed");
+        return false;
+    }
+    if (xTaskCreate(boot_led_task, "boot_led", 2048U, s_power, 4U, &s_boot_led_task) != pdPASS) {
+        ESP_LOGE(TAG, "Boot LED task creation failed");
+        s_boot_led_task = NULL;
+        return false;
+    }
+    return true;
+}
+
+static void stop_boot_led(void)
+{
+    if (s_boot_led_task == NULL) return;
+
+    (void)xTaskNotifyGive(s_boot_led_task);
+    (void)xSemaphoreTake(s_boot_led_stopped, portMAX_DELAY);
+    s_boot_led_task = NULL;
+}
 
 static esp_err_t initialize_nvs(void)
 {
@@ -57,7 +103,9 @@ static esp_err_t initialize_i2c_bus(void)
 
 static void cleanup_sensor_bus(void)
 {
+    stop_boot_led();
     if (s_power != NULL) {
+        (void)power_set_status_led(s_power, false);
         (void)power_close(s_power);
         s_power = NULL;
     }
@@ -81,8 +129,25 @@ void app_main(void)
         return;
     }
 
+    if (initialize_i2c_bus() != ESP_OK) {
+        return;
+    }
+
+    const power_config_t power_config = POWER_DEFAULT_CONFIG(s_i2c_bus);
+    const power_error_t power_result = power_open(&power_config, &s_power);
+    if (power_result != POWER_OK) {
+        ESP_LOGE(TAG, "M5PM1 initialization failed: %d", power_result);
+        cleanup_sensor_bus();
+        return;
+    }
+    if (!start_boot_led()) {
+        cleanup_sensor_bus();
+        return;
+    }
+
     if (initialize_wifi() != NETWORK_OK) {
         ESP_LOGE(TAG, "Wi-Fi initialization failed");
+        cleanup_sensor_bus();
         return;
     }
 
@@ -91,6 +156,7 @@ void app_main(void)
     err = esp_netif_sntp_init(&config);
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "SNTP initialization failed: %s", esp_err_to_name(err));
+        cleanup_sensor_bus();
         return;
     }
 
@@ -105,6 +171,7 @@ void app_main(void)
     }
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "SNTP synchronization failed: %s", esp_err_to_name(err));
+        cleanup_sensor_bus();
         return;
     }
 
@@ -114,21 +181,10 @@ void app_main(void)
     time(&now);
     if (gmtime_r(&now, &utc_time) == NULL || strftime(timestamp, sizeof(timestamp), "%Y-%m-%dT%H:%M:%SZ", &utc_time) == 0) {
         ESP_LOGE(TAG, "Could not format synchronized UTC time");
-        return;
-    }
-    ESP_LOGI(TAG, "Synchronized UTC time: %s", timestamp);
-
-    if (initialize_i2c_bus() != ESP_OK) {
-        return;
-    }
-
-    const power_config_t power_config = POWER_DEFAULT_CONFIG(s_i2c_bus);
-    const power_error_t power_result = power_open(&power_config, &s_power);
-    if (power_result != POWER_OK) {
-        ESP_LOGE(TAG, "M5PM1 initialization failed: %d", power_result);
         cleanup_sensor_bus();
         return;
     }
+    ESP_LOGI(TAG, "Synchronized UTC time: %s", timestamp);
 
     power_wake_flags_t wake_sources;
     if (power_get_wake_sources(s_power, &wake_sources) != POWER_OK) {
@@ -170,7 +226,7 @@ void app_main(void)
     }
 
     uploader_context_t *uploader;
-    uploader_error_t uploader_result = uploader_initialize(&handoff, &uploader);
+    uploader_error_t uploader_result = uploader_initialize(&handoff, s_power, &uploader);
     if (uploader_result != UPLOADER_OK) {
         ESP_LOGE(TAG, "Uploader initialization failed: %d", uploader_result);
         cleanup_sensor_bus();
@@ -183,6 +239,7 @@ void app_main(void)
         return;
     }
 
+    stop_boot_led();
     recorder_result = data_recorder_start(s_bmi270, &handoff);
     if (recorder_result != DATA_RECORDER_OK) {
         ESP_LOGE(TAG, "Recorder startup failed: %d", recorder_result);
