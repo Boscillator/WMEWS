@@ -1,4 +1,4 @@
-idf_component_register(SRCS "hello_world_main.c" "config.c" "network.c" "bmi270.c" "data_recorder.c" "uploader.c" "uploader_json.c" "uploader_http.c"
+idf_component_register(SRCS "hello_world_main.c" "config.c" "network.c" "power.c" "bmi270.c" "data_recorder.c" "uploader.c" "uploader_json.c" "uploader_http.c"
                        INCLUDE_DIRS "."
                        REQUIRES esp_driver_i2c
                        PRIV_REQUIRES nvs_flash esp_wifi esp_event esp_netif freertos espressif__cjson app_update esp_http_client mbedtls)

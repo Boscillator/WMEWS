@@ -9,10 +9,12 @@
 #include "bmi270.h"
 #include "data_recorder.h"
 #include "network.h"
+#include "power.h"
 #include "uploader.h"
 
 static const char *TAG = "wmews";
 static bmi270_handle_t *s_bmi270;
+static power_handle_t *s_power;
 static i2c_master_bus_handle_t s_i2c_bus;
 
 #define SNTP_SYNC_RETRIES 5
@@ -55,6 +57,10 @@ static esp_err_t initialize_i2c_bus(void)
 
 static void cleanup_sensor_bus(void)
 {
+    if (s_power != NULL) {
+        (void)power_close(s_power);
+        s_power = NULL;
+    }
     if (s_bmi270 != NULL) {
         (void)bmi270_close(s_bmi270);
         s_bmi270 = NULL;
@@ -115,6 +121,37 @@ void app_main(void)
     if (initialize_i2c_bus() != ESP_OK) {
         return;
     }
+
+    const power_config_t power_config = POWER_DEFAULT_CONFIG(s_i2c_bus);
+    const power_error_t power_result = power_open(&power_config, &s_power);
+    if (power_result != POWER_OK) {
+        ESP_LOGE(TAG, "M5PM1 initialization failed: %d", power_result);
+        cleanup_sensor_bus();
+        return;
+    }
+
+    power_wake_flags_t wake_sources;
+    if (power_get_wake_sources(s_power, &wake_sources) != POWER_OK) {
+        ESP_LOGE(TAG, "M5PM1 wake-source read failed");
+        cleanup_sensor_bus();
+        return;
+    }
+    if ((wake_sources & POWER_WAKE_EXTERNAL) != 0U) {
+        ESP_LOGI(TAG, "Wake reason: PMIC external GPIO (motion candidate)");
+    }
+    if (wake_sources != 0U && power_clear_wake_sources(s_power, wake_sources) != POWER_OK) {
+        ESP_LOGE(TAG, "M5PM1 wake-source clear failed");
+        cleanup_sensor_bus();
+        return;
+    }
+
+    uint16_t battery_mv;
+    if (power_read_battery_mv(s_power, &battery_mv) != POWER_OK) {
+        ESP_LOGE(TAG, "M5PM1 battery read failed");
+        cleanup_sensor_bus();
+        return;
+    }
+    ESP_LOGI(TAG, "Battery voltage: %u mV", (unsigned)battery_mv);
 
     const bmi270_config_t sensor_config = BMI270_DEFAULT_CONFIG(s_i2c_bus);
     const bmi270_error_t sensor_result = bmi270_open(&sensor_config, &s_bmi270);
