@@ -91,3 +91,34 @@ Remove generated build output and configure again:
 idf.py fullclean
 idf.py build
 ```
+
+## BMI270 any-motion threshold tuning
+
+The BMI270 driver includes a disabled-by-default trace for tuning any-motion
+settings. To enable it, change `BMI270_DEBUG_ANYMOTION` from `0` to `1` near
+the driver configuration constants in `firmware/main/bmi270.c`, then rebuild
+the firmware with `idf.py build`. The trace evaluates every accelerometer
+sample but emits one log record for every tenth sample, so it can still produce
+high log volume; use it only for bench testing and leave it disabled for normal
+battery operation.
+
+Records have this shape:
+
+```text
+I (...) bmi270: any-motion trace: sensor_time=123456 accel_lsb=(12,-34,4090) delta_lsb=(2,-5,18) first=0
+```
+
+`sensor_time` is the BMI270 sensor-time counter. `accel_lsb` contains raw
+accelerometer values, and `delta_lsb` contains signed differences from the
+immediately previous sample on each axis, including samples that are not
+printed. The first record after initialization or reinitialization is marked
+`first=1` and reports `delta_lsb=(n/a,n/a,n/a)`.
+The driver is configured for ±8 g, where 4096 LSB equals 1 g; therefore 1 LSB
+is approximately 0.244 mg.
+
+The any-motion feature compares an acceleration slope against its programmed
+threshold and requires the condition to hold for a configured consecutive
+sample duration. See the `any_motion` section of
+[`docs/bmi270.md`](../docs/bmi270.md) for the sensor settings. The logged
+adjacent-sample deltas are observed measurement data for threshold tuning,
+not a software emulation of the BMI270's internal reference algorithm.

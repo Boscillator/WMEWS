@@ -10,6 +10,9 @@
 
 static const char *TAG = "bmi270";
 
+/* Set to 1 only for bench tuning; per-sample logging is intentionally disabled. */
+#define BMI270_DEBUG_ANYMOTION 1
+
 enum {
     REG_CHIP_ID = 0x00, REG_SENSORTIME = 0x18, REG_INTERNAL_STATUS = 0x21,
     REG_TEMPERATURE = 0x22, REG_FIFO_LENGTH = 0x24, REG_FIFO_DATA = 0x26,
@@ -35,6 +38,13 @@ struct bmi270_handle {
     bmi270_state_t state;
     bool fifo_overrun;
     uint8_t fifo_buffer[FIFO_BURST_SIZE];
+#if BMI270_DEBUG_ANYMOTION
+    int16_t trace_previous_accel_x;
+    int16_t trace_previous_accel_y;
+    int16_t trace_previous_accel_z;
+    bool trace_have_previous;
+    uint8_t trace_sample_modulo;
+#endif
 };
 
 static bmi270_handle_t s_handle;
@@ -105,9 +115,45 @@ static bmi270_error_t read_chip_id_after_reset(uint8_t *chip_id)
 static int16_t le16(const uint8_t *value) { return (int16_t)((uint16_t)value[0] | ((uint16_t)value[1] << 8)); }
 static uint32_t le24(const uint8_t *value) { return (uint32_t)value[0] | ((uint32_t)value[1] << 8) | ((uint32_t)value[2] << 16); }
 
+#if BMI270_DEBUG_ANYMOTION
+static void reset_trace_state(void)
+{
+    s_handle.trace_have_previous = false;
+}
+
+static void trace_accel_sample(bmi270_handle_t *handle, const bmi270_data_t *sample)
+{
+    const bool emit = handle->trace_sample_modulo == 0;
+    handle->trace_sample_modulo = (uint8_t)((handle->trace_sample_modulo + 1U) % 10U);
+
+    if (!handle->trace_have_previous) {
+        if (emit) {
+            ESP_LOGI(TAG, "any-motion trace: sensor_time=%" PRIu32
+                     " accel_lsb=(%d,%d,%d) delta_lsb=(n/a,n/a,n/a) first=1",
+                     sample->sensor_time, (int)sample->accel_x, (int)sample->accel_y, (int)sample->accel_z);
+        }
+    } else if (emit) {
+        const int32_t delta_x = (int32_t)sample->accel_x - handle->trace_previous_accel_x;
+        const int32_t delta_y = (int32_t)sample->accel_y - handle->trace_previous_accel_y;
+        const int32_t delta_z = (int32_t)sample->accel_z - handle->trace_previous_accel_z;
+        ESP_LOGI(TAG, "any-motion trace: sensor_time=%" PRIu32
+                 " accel_lsb=(%d,%d,%d) delta_lsb=(%" PRId32 ",%" PRId32 ",%" PRId32 ") first=0",
+                 sample->sensor_time, (int)sample->accel_x, (int)sample->accel_y, (int)sample->accel_z,
+                 delta_x, delta_y, delta_z);
+    }
+    handle->trace_previous_accel_x = sample->accel_x;
+    handle->trace_previous_accel_y = sample->accel_y;
+    handle->trace_previous_accel_z = sample->accel_z;
+    handle->trace_have_previous = true;
+}
+#endif
+
 static void reset_handle(void)
 {
     memset(&s_handle, 0, sizeof(s_handle));
+#if BMI270_DEBUG_ANYMOTION
+    reset_trace_state();
+#endif
     s_handle.state = STATE_CLOSED;
 }
 
@@ -276,6 +322,9 @@ bmi270_error_t bmi270_read(bmi270_handle_t *handle, bmi270_data_t *samples, size
     const int16_t temperature = le16(temp_bytes);
     for (size_t i = 0; i < count; ++i) {
         samples[i].sensor_time = (latest_time - (uint32_t)(count - i - 1U) * handle->sensor_ticks_per_sample) & 0xFFFFFFU;
+#if BMI270_DEBUG_ANYMOTION
+        trace_accel_sample(handle, &samples[i]);
+#endif
         samples[i].temperature = temperature;
         if (temperature != INT16_MIN) samples[i].flags |= BMI270_DATA_TEMPERATURE_VALID;
     }
