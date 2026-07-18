@@ -1,6 +1,7 @@
 #include "data_recorder.h"
 
 #include <stdbool.h>
+#include <time.h>
 
 #include "esp_log.h"
 #include "freertos/FreeRTOS.h"
@@ -29,6 +30,14 @@ typedef struct recorder_context {
 static acceleration_sample_t s_window_storage[BUFFER_COUNT][WINDOW_MAX_SAMPLES];
 static recorder_context_t s_context;
 
+static void return_window_to_free_queue(const recorder_context_t *context,
+                                        const acceleration_window_t *window)
+{
+    while (xQueueSend(context->handoff.free_queue, window, BACKPRESSURE_WAIT_TICKS) != pdPASS) {
+        ESP_LOGE(TAG, "Could not return discarded window to free queue; retrying");
+    }
+}
+
 static void recorder_task(void *argument)
 {
     recorder_context_t *context = argument;
@@ -43,6 +52,15 @@ static void recorder_task(void *argument)
         window.count = 0U;
         window.capacity = context->window_capacity;
         window.sample_rate_hz = context->sample_rate_hz;
+        window.start_time = (time_t)-1;
+        window.end_time = (time_t)-1;
+
+        window.start_time = time(NULL);
+        if (window.start_time == (time_t)-1) {
+            ESP_LOGE(TAG, "Could not read capture start time; discarding window");
+            return_window_to_free_queue(context, &window);
+            continue;
+        }
 
         while (window.count < window.capacity) {
             const size_t remaining = window.capacity - window.count;
@@ -73,6 +91,13 @@ static void recorder_task(void *argument)
                     .accel_z = scratch[index].accel_z,
                 };
             }
+        }
+
+        window.end_time = time(NULL);
+        if (window.end_time == (time_t)-1) {
+            ESP_LOGE(TAG, "Could not read capture end time; discarding window");
+            return_window_to_free_queue(context, &window);
+            continue;
         }
 
         if (xQueueSend(context->handoff.ready_queue, &window, portMAX_DELAY) != pdPASS) {
@@ -114,6 +139,8 @@ data_recorder_error_t data_recorder_initialize(uploader_handoff_t *handoff)
             .count = 0U,
             .capacity = WINDOW_MAX_SAMPLES,
             .sample_rate_hz = 0U,
+            .start_time = (time_t)-1,
+            .end_time = (time_t)-1,
         };
         if (xQueueSend(free_queue, &window, 0U) != pdPASS) {
             ESP_LOGE(TAG, "Initialize failed: could not seed free buffer queue");

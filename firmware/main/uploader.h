@@ -2,6 +2,7 @@
 
 #include <stddef.h>
 #include <stdint.h>
+#include <time.h>
 
 #include "freertos/FreeRTOS.h"
 #include "freertos/queue.h"
@@ -31,6 +32,9 @@ typedef struct {
     size_t capacity;
     /** Recorder-owned acquisition metadata that travels with the sample buffer. */
     uint32_t sample_rate_hz;
+    /** Wall-clock bounds sampled by the recorder during its ownership interval. */
+    time_t start_time;
+    time_t end_time;
 } acceleration_window_t;
 
 typedef struct {

@@ -42,12 +42,11 @@ typedef struct {
     size_t length;
 } counting_writer_context_t;
 
-static bool format_utc_timestamp(char *timestamp, size_t timestamp_size)
+static bool format_utc_timestamp(time_t capture_time, char *timestamp, size_t timestamp_size)
 {
-    time_t now;
     struct tm utc_time;
 
-    if (time(&now) == (time_t)-1 || gmtime_r(&now, &utc_time) == NULL ||
+    if (capture_time == (time_t)-1 || gmtime_r(&capture_time, &utc_time) == NULL ||
         strftime(timestamp, timestamp_size, "%Y-%m-%dT%H:%M:%SZ", &utc_time) == 0U) {
         ESP_LOGE(TAG, "Could not format UTC timestamp");
         return false;
@@ -174,10 +173,13 @@ static void uploader_task(void *argument)
         }
 
         if (window.samples == NULL || window.count == 0U || window.count > window.capacity ||
-            window.sample_rate_hz == 0U) {
-            ESP_LOGE(TAG, "Received invalid window: samples=%p count=%u capacity=%u rate=%uHz",
+            window.sample_rate_hz == 0U || window.start_time == (time_t)-1 ||
+            window.end_time == (time_t)-1) {
+            ESP_LOGE(TAG,
+                     "Received invalid window: samples=%p count=%u capacity=%u rate=%uHz start=%lld end=%lld",
                      (void *)window.samples, (unsigned)window.count, (unsigned)window.capacity,
-                     (unsigned)window.sample_rate_hz);
+                     (unsigned)window.sample_rate_hz, (long long)window.start_time,
+                     (long long)window.end_time);
             return_window_or_retry(context, &window);
             continue;
         }
@@ -185,8 +187,9 @@ static void uploader_task(void *argument)
         char start_time[sizeof("YYYY-MM-DDTHH:MM:SSZ")];
         char end_time[sizeof("YYYY-MM-DDTHH:MM:SSZ")];
         const esp_app_desc_t *app_description = esp_app_get_description();
-        if (!format_utc_timestamp(start_time, sizeof(start_time)) || app_description == NULL ||
-            app_description->version[0] == '\0' || !format_utc_timestamp(end_time, sizeof(end_time))) {
+        if (!format_utc_timestamp(window.start_time, start_time, sizeof(start_time)) ||
+            app_description == NULL || app_description->version[0] == '\0' ||
+            !format_utc_timestamp(window.end_time, end_time, sizeof(end_time))) {
             ESP_LOGE(TAG, "Could not prepare stream header metadata");
             return_window_or_retry(context, &window);
             continue;
