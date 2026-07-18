@@ -1,4 +1,5 @@
 #include "bmi270.h"
+#include "power.h"
 
 #include <inttypes.h>
 #include <stdbool.h>
@@ -11,7 +12,7 @@
 static const char *TAG = "bmi270";
 
 /* Set to 1 only for bench tuning; per-sample logging is intentionally disabled. */
-#define BMI270_DEBUG_ANYMOTION 1
+#define BMI270_DEBUG_ANYMOTION 0
 
 enum {
     REG_CHIP_ID = 0x00, REG_SENSORTIME = 0x18, REG_INTERNAL_STATUS = 0x21,
@@ -19,13 +20,19 @@ enum {
     REG_ACC_CONF = 0x40, REG_ACC_RANGE = 0x41, REG_GYR_CONF = 0x42,
     REG_GYR_RANGE = 0x43, REG_FIFO_DOWNS = 0x45, REG_FIFO_CONFIG_0 = 0x48,
     REG_FIFO_CONFIG_1 = 0x49, REG_INIT_CTRL = 0x59, REG_INIT_ADDR_0 = 0x5B,
-    REG_INIT_DATA = 0x5E, REG_CMD = 0x7E, REG_PWR_CONF = 0x7C, REG_PWR_CTRL = 0x7D,
+    REG_INIT_DATA = 0x5E, REG_FEAT_PAGE = 0x2F, REG_FEATURES_ANYMO_1 = 0x3C,
+    REG_FEATURES_ANYMO_2 = 0x3E, REG_INT1_IO_CTRL = 0x53, REG_INT_LATCH = 0x55,
+    REG_INT1_MAP_FEAT = 0x56, REG_CMD = 0x7E, REG_PWR_CONF = 0x7C, REG_PWR_CTRL = 0x7D,
     CHIP_ID = 0x24, CMD_SOFT_RESET = 0xB6, CMD_FIFO_FLUSH = 0xB0,
     PWR_CTRL_ENABLE_ALL = 0x0E, FIFO_HEADER_ACC_GYR = 0x8C,
     FIFO_CONTROL_SKIP = 0x40, FIFO_CONTROL_TIME = 0x44, FIFO_CONTROL_CONFIG = 0x48,
     FIFO_OVERREAD = 0x80, FIFO_CONFIG_0_TIME = 0x02, FIFO_CONFIG_1_HEADER_ACC_GYR = 0xD0,
     ACC_RANGE_8G = 0x02, GYR_RANGE_2000DPS = 0x00, FIFO_DOWNS_FILTERED = 0x88, CONFIG_IMAGE_SIZE = 8192,
     IMAGE_CHUNK_SIZE = 32, FIFO_BURST_SIZE = 2048, I2C_TIMEOUT_MS = 100,
+    FEATURE_PAGE_ANYMOTION = 0x02, ANYMO_1_DURATION_DEFAULT = 5,
+    ANYMO_1_SELECT_ALL_AXES = 0xE000, ANYMO_2_OUT_CONF_BIT_6 = 0x3800,
+    ANYMO_2_ENABLE = 0x8000, INT1_OUTPUT_ENABLE = 0x08, INT1_OPEN_DRAIN = 0x04,
+    INT1_ANYMOTION_MAP = 0x40,
 };
 
 typedef enum { STATE_CLOSED, STATE_INITIALIZING, STATE_READY, STATE_READING, STATE_ERROR } bmi270_state_t;
@@ -97,6 +104,47 @@ static bmi270_error_t write_burst(uint8_t reg, const uint8_t *data, size_t lengt
 static bmi270_error_t read_reg(uint8_t reg, uint8_t *data, size_t length)
 {
     return transport_result(i2c_master_transmit_receive(s_handle.device, &reg, 1, data, length, I2C_TIMEOUT_MS), "read", reg);
+}
+
+/* Feature-register writes must select a page and cover a complete aligned word. */
+static bmi270_error_t write_feature_word(uint8_t address, uint16_t value)
+{
+    if ((address & 1U) != 0U) {
+        ESP_LOGE(TAG, "unaligned feature address 0x%02x", address);
+        return BMI270_ERR_INVALID_ARGUMENT;
+    }
+    bmi270_error_t result = write_reg(REG_FEAT_PAGE, FEATURE_PAGE_ANYMOTION);
+    if (result != BMI270_OK) return result;
+    const uint8_t data[] = {(uint8_t)(value & 0xFFU), (uint8_t)(value >> 8)};
+    return write_burst(address, data, sizeof(data));
+}
+
+static bmi270_error_t update_reg_bits(uint8_t reg, uint8_t mask, uint8_t value)
+{
+    uint8_t current;
+    bmi270_error_t result = read_reg(reg, &current, sizeof(current));
+    if (result != BMI270_OK) return result;
+    return write_reg(reg, (uint8_t)((current & (uint8_t)~mask) | (value & mask)));
+}
+
+static bmi270_error_t power_result(power_error_t result, const char *operation)
+{
+    if (result == POWER_OK) return BMI270_OK;
+    ESP_LOGE(TAG, "%s failed: power error %d", operation, result);
+    switch (result) {
+    case POWER_ERR_INVALID_ARGUMENT: return BMI270_ERR_INVALID_ARGUMENT;
+    case POWER_ERR_INVALID_CONFIG:
+    case POWER_ERR_CONFIGURATION: return BMI270_ERR_INVALID_CONFIG;
+    case POWER_ERR_INVALID_STATE: return BMI270_ERR_INVALID_STATE;
+    default: return BMI270_ERR_TRANSPORT;
+    }
+}
+
+static void cleanup_anymotion(power_handle_t *power)
+{
+    (void)power_disable_motion_wake(power);
+    (void)update_reg_bits(REG_INT1_MAP_FEAT, INT1_ANYMOTION_MAP, 0U);
+    (void)write_feature_word(REG_FEATURES_ANYMO_2, 0U);
 }
 
 static bmi270_error_t read_chip_id_after_reset(uint8_t *chip_id)
@@ -211,6 +259,72 @@ uint32_t bmi270_get_sensor_time_dt_us(const bmi270_handle_t *handle) { return is
 float bmi270_get_gyro_lsb(const bmi270_handle_t *handle) { return is_live(handle) ? 16.384F : 0.0F; }
 float bmi270_get_accel_lsb(const bmi270_handle_t *handle) { return is_live(handle) ? 4096.0F : 0.0F; }
 float bmi270_get_temperature_lsb(const bmi270_handle_t *handle) { return is_live(handle) ? 512.0F : 0.0F; }
+
+bmi270_error_t bmi270_enable_anymotion_interrupt(bmi270_handle_t *handle,
+                                                  power_handle_t *power, uint16_t threshold)
+{
+    if (handle == NULL || power == NULL) {
+        ESP_LOGE(TAG, "any-motion enable handle is null");
+        return BMI270_ERR_INVALID_ARGUMENT;
+    }
+    if (handle != &s_handle || handle->state != STATE_READY) {
+        ESP_LOGE(TAG, "any-motion enable in invalid state");
+        return BMI270_ERR_INVALID_STATE;
+    }
+    if (threshold > BMI270_ANYMOTION_THRESHOLD_MAX) {
+        ESP_LOGE(TAG, "any-motion threshold %u exceeds %u", threshold,
+                 BMI270_ANYMOTION_THRESHOLD_MAX);
+        return BMI270_ERR_INVALID_CONFIG;
+    }
+
+    bmi270_error_t result = power_result(power_disable_motion_wake(power), "disarm motion wake");
+    if (result == BMI270_OK) {
+        const uint16_t anymo_1 = ANYMO_1_SELECT_ALL_AXES | ANYMO_1_DURATION_DEFAULT;
+        result = write_feature_word(REG_FEATURES_ANYMO_1, anymo_1);
+    }
+    if (result == BMI270_OK) {
+        const uint16_t anymo_2 = ANYMO_2_ENABLE | ANYMO_2_OUT_CONF_BIT_6 | threshold;
+        result = write_feature_word(REG_FEATURES_ANYMO_2, anymo_2);
+    }
+    if (result == BMI270_OK) result = write_reg(REG_INT1_IO_CTRL, INT1_OUTPUT_ENABLE | INT1_OPEN_DRAIN);
+    if (result == BMI270_OK) result = write_reg(REG_INT_LATCH, 0U);
+    if (result == BMI270_OK) result = update_reg_bits(REG_INT1_MAP_FEAT, INT1_ANYMOTION_MAP,
+                                                       INT1_ANYMOTION_MAP);
+    if (result == BMI270_OK) {
+        result = power_result(power_configure_motion_wake(power, POWER_WAKE_EDGE_FALLING,
+                                                           POWER_WAKE_PULL_UP), "arm motion wake");
+    }
+    if (result != BMI270_OK) {
+        cleanup_anymotion(power);
+        return result;
+    }
+
+    ESP_LOGI(TAG, "any-motion enabled: threshold=%u, duration=%u, axes=XYZ", threshold,
+             ANYMO_1_DURATION_DEFAULT);
+    return BMI270_OK;
+}
+
+bmi270_error_t bmi270_disable_anymotion_interrupt(bmi270_handle_t *handle, power_handle_t *power)
+{
+    if (handle == NULL || power == NULL) {
+        ESP_LOGE(TAG, "any-motion disable handle is null");
+        return BMI270_ERR_INVALID_ARGUMENT;
+    }
+    if (handle != &s_handle || handle->state != STATE_READY) {
+        ESP_LOGE(TAG, "any-motion disable in invalid state");
+        return BMI270_ERR_INVALID_STATE;
+    }
+
+    bmi270_error_t result = power_result(power_disable_motion_wake(power), "disarm motion wake");
+    bmi270_error_t sensor_result = update_reg_bits(REG_INT1_MAP_FEAT, INT1_ANYMOTION_MAP, 0U);
+    const bmi270_error_t disable_result = write_feature_word(REG_FEATURES_ANYMO_2, 0U);
+    if (sensor_result == BMI270_OK) sensor_result = disable_result;
+    if (result == BMI270_OK) result = sensor_result;
+    if (result != BMI270_OK) return result;
+
+    ESP_LOGI(TAG, "any-motion disabled");
+    return BMI270_OK;
+}
 
 bmi270_error_t bmi270_open(const bmi270_config_t *config, bmi270_handle_t **handle)
 {

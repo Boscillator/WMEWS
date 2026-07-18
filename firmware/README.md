@@ -92,7 +92,24 @@ idf.py fullclean
 idf.py build
 ```
 
-## BMI270 any-motion threshold tuning
+## BMI270 any-motion wake and threshold tuning
+
+Enable the production wake path after opening both drivers:
+
+```c
+bmi270_error_t result = bmi270_enable_anymotion_interrupt(
+    imu, power, BMI270_ANYMOTION_THRESHOLD_DEFAULT);
+```
+
+The default threshold is 64 BMI270 any-motion feature units; valid thresholds
+are 0 through 2047. Any-motion always monitors the X, Y, and Z axes, using the
+BMI270 hardware default duration of five 50 Hz samples (100 ms). The driver
+configures INT1 as active-low open-drain and maps its any-motion output to
+M5PM1 GPIO4, which the PMIC arms for falling-edge wake with a pull-up. Call
+`bmi270_disable_anymotion_interrupt(imu, power)` before closing either driver
+when motion wake is no longer required.
+
+For bench threshold tuning, the driver also includes a disabled-by-default trace.
 
 The BMI270 driver includes a disabled-by-default trace for tuning any-motion
 settings. To enable it, change `BMI270_DEBUG_ANYMOTION` from `0` to `1` near

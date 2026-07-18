@@ -9,6 +9,8 @@
 #define BMI270_I2C_CLOCK_HZ_DEFAULT 400000U
 #define BMI270_MIN_SAMPLE_RATE_HZ 25U
 #define BMI270_MAX_SAMPLE_RATE_HZ 1600U
+#define BMI270_ANYMOTION_THRESHOLD_DEFAULT 64U
+#define BMI270_ANYMOTION_THRESHOLD_MAX 0x7FFU
 #define BMI270_DEFAULT_CONFIG(bus_) \
     { .bus = (bus_), .i2c_address = BMI270_I2C_ADDRESS_DEFAULT, \
       .i2c_clock_hz = BMI270_I2C_CLOCK_HZ_DEFAULT, .sample_rate_hz = 100U }
@@ -57,6 +59,7 @@ typedef struct {
 } bmi270_data_t;
 
 typedef struct bmi270_handle bmi270_handle_t;
+typedef struct power_handle power_handle_t;
 
 /** Return the configured hardware ODR, or zero unless the driver is live. */
 uint32_t bmi270_get_sample_rate_hz(const bmi270_handle_t *handle);
@@ -65,6 +68,16 @@ uint32_t bmi270_get_sensor_time_dt_us(const bmi270_handle_t *handle);
 float bmi270_get_gyro_lsb(const bmi270_handle_t *handle);
 float bmi270_get_accel_lsb(const bmi270_handle_t *handle);
 float bmi270_get_temperature_lsb(const bmi270_handle_t *handle);
+
+/** Enable all-axis any-motion detection and arm PMIC GPIO4 for its active-low INT1 output.
+ * threshold is in BMI270 any-motion feature units and must not exceed
+ * BMI270_ANYMOTION_THRESHOLD_MAX. */
+bmi270_error_t bmi270_enable_anymotion_interrupt(bmi270_handle_t *handle,
+                                                  power_handle_t *power,
+                                                  uint16_t threshold);
+/** Disarm PMIC GPIO4, then remove the any-motion INT1 mapping and disable the feature. */
+bmi270_error_t bmi270_disable_anymotion_interrupt(bmi270_handle_t *handle,
+                                                   power_handle_t *power);
 
 /** Add and initialize the BMI270 on the supplied application-owned bus. */
 bmi270_error_t bmi270_open(const bmi270_config_t *config, bmi270_handle_t **handle);
