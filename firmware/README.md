@@ -94,17 +94,21 @@ idf.py build
 
 ## BMI270 any-motion wake and threshold tuning
 
-Enable the production wake path after opening both drivers:
+The firmware automatically enables the production wake path during startup,
+before it begins recording. Pressing KEY2 (ESP32-S3 GPIO12) requests an M5PM1
+power-off. The BMI270 any-motion interrupt remains armed as the intended wake
+source through its INT1-to-M5PM1-GPIO4 path.
+The PMIC retains the BMI270's L1 3.3 V supply while the ESP32 is powered off,
+so INT1 remains valid until motion occurs.
 
-```c
-bmi270_error_t result = bmi270_enable_anymotion_interrupt(
-    imu, power, BMI270_ANYMOTION_THRESHOLD_DEFAULT);
-```
+For a bench check, boot the device, press KEY2 and observe PMIC shutdown, then
+move the device enough to trigger any-motion. It should boot again and report
+the external-GPIO motion-candidate wake reason.
 
 The default threshold is 64 BMI270 any-motion feature units; valid thresholds
 are 0 through 2047. Any-motion always monitors the X, Y, and Z axes, using the
 BMI270 hardware default duration of five 50 Hz samples (100 ms). The driver
-configures INT1 as active-low open-drain and maps its any-motion output to
+configures INT1 as active-low push-pull and maps its any-motion output to
 M5PM1 GPIO4, which the PMIC arms for falling-edge wake with a pull-up. Call
 `bmi270_disable_anymotion_interrupt(imu, power)` before closing either driver
 when motion wake is no longer required.

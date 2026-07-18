@@ -63,10 +63,10 @@ power_error_t power_flash_status_led(power_handle_t *handle, uint32_t duration_m
 power_error_t power_get_wake_sources(power_handle_t *handle, power_wake_flags_t *sources);
 /** Clear the selected PMIC wake-source flags (write-one-to-clear). */
 power_error_t power_clear_wake_sources(power_handle_t *handle, power_wake_flags_t sources);
-/** Configure PMIC GPIO4 as the BMI270 motion wake source. */
+/** Configure PMIC GPIO4 for BMI270 wake and retain the IMU L1 supply through power-off. */
 power_error_t power_configure_motion_wake(power_handle_t *handle, power_wake_edge_t edge,
                                            power_wake_pull_t pull);
-/** Disable PMIC GPIO4 motion wake and release its retained pull configuration. */
+/** Disable PMIC GPIO4 motion wake and release its GPIO and IMU-supply retention. */
 power_error_t power_disable_motion_wake(power_handle_t *handle);
 /** Power off through the M5PM1. On success this function does not return. */
 power_error_t power_off(power_handle_t *handle);

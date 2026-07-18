@@ -1,5 +1,6 @@
 #include <time.h>
 #include <stdbool.h>
+#include <stdint.h>
 
 #include "esp_log.h"
 #include "esp_netif_sntp.h"
@@ -12,11 +13,13 @@
 #include "data_recorder.h"
 #include "network.h"
 #include "power.h"
+#include "shutdown_button.h"
 #include "uploader.h"
 
 static const char *TAG = "wmews";
 static bmi270_handle_t *s_bmi270;
 static power_handle_t *s_power;
+static shutdown_button_context_t *s_shutdown_button;
 static i2c_master_bus_handle_t s_i2c_bus;
 static TaskHandle_t s_boot_led_task;
 static StaticSemaphore_t s_boot_led_stopped_storage;
@@ -213,6 +216,25 @@ void app_main(void)
     const bmi270_error_t sensor_result = bmi270_open(&sensor_config, &s_bmi270);
     if (sensor_result != BMI270_OK) {
         ESP_LOGE(TAG, "BMI270 initialization failed: %d", sensor_result);
+        cleanup_sensor_bus();
+        return;
+    }
+
+    const bmi270_error_t anymotion_result =
+        bmi270_enable_anymotion_interrupt(s_bmi270, s_power, BMI270_ANYMOTION_THRESHOLD_DEFAULT);
+    if (anymotion_result != BMI270_OK) {
+        ESP_LOGE(TAG, "BMI270 any-motion setup failed: %d", anymotion_result);
+        cleanup_sensor_bus();
+        return;
+    }
+
+    shutdown_button_error_t shutdown_button_result =
+        shutdown_button_initialize(s_power, &s_shutdown_button);
+    if (shutdown_button_result == SHUTDOWN_BUTTON_OK) {
+        shutdown_button_result = shutdown_button_start(s_shutdown_button);
+    }
+    if (shutdown_button_result != SHUTDOWN_BUTTON_OK) {
+        ESP_LOGE(TAG, "KEY2 shutdown listener setup failed: %d", shutdown_button_result);
         cleanup_sensor_bus();
         return;
     }

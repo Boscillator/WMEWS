@@ -29,9 +29,9 @@ enum {
     FIFO_OVERREAD = 0x80, FIFO_CONFIG_0_TIME = 0x02, FIFO_CONFIG_1_HEADER_ACC_GYR = 0xD0,
     ACC_RANGE_8G = 0x02, GYR_RANGE_2000DPS = 0x00, FIFO_DOWNS_FILTERED = 0x88, CONFIG_IMAGE_SIZE = 8192,
     IMAGE_CHUNK_SIZE = 32, FIFO_BURST_SIZE = 2048, I2C_TIMEOUT_MS = 100,
-    FEATURE_PAGE_ANYMOTION = 0x02, ANYMO_1_DURATION_DEFAULT = 5,
+    FEATURE_PAGE_ANYMOTION = 0x01, ANYMO_1_DURATION_DEFAULT = 5,
     ANYMO_1_SELECT_ALL_AXES = 0xE000, ANYMO_2_OUT_CONF_BIT_6 = 0x3800,
-    ANYMO_2_ENABLE = 0x8000, INT1_OUTPUT_ENABLE = 0x08, INT1_OPEN_DRAIN = 0x04,
+    ANYMO_2_ENABLE = 0x8000, INT1_OUTPUT_ENABLE = 0x08,
     INT1_ANYMOTION_MAP = 0x40,
 };
 
@@ -286,7 +286,9 @@ bmi270_error_t bmi270_enable_anymotion_interrupt(bmi270_handle_t *handle,
         const uint16_t anymo_2 = ANYMO_2_ENABLE | ANYMO_2_OUT_CONF_BIT_6 | threshold;
         result = write_feature_word(REG_FEATURES_ANYMO_2, anymo_2);
     }
-    if (result == BMI270_OK) result = write_reg(REG_INT1_IO_CTRL, INT1_OUTPUT_ENABLE | INT1_OPEN_DRAIN);
+    /* The StickS3 motion-wake circuit needs INT1 to drive both its idle-high
+     * and active-low states while the ESP32 supply is off. */
+    if (result == BMI270_OK) result = write_reg(REG_INT1_IO_CTRL, INT1_OUTPUT_ENABLE);
     if (result == BMI270_OK) result = write_reg(REG_INT_LATCH, 0U);
     if (result == BMI270_OK) result = update_reg_bits(REG_INT1_MAP_FEAT, INT1_ANYMOTION_MAP,
                                                        INT1_ANYMOTION_MAP);

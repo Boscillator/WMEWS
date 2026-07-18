@@ -18,6 +18,7 @@ enum {
     REG_HOLD_CFG = 0x07,
     REG_SYS_CMD = 0x0C,
     REG_GPIO_MODE = 0x10,
+    REG_GPIO_IN = 0x12,
     REG_GPIO_PU_PD_1 = 0x15,
     REG_GPIO_FUNC_1 = 0x17,
     REG_GPIO_WAKE_EN = 0x18,
@@ -25,12 +26,16 @@ enum {
     REG_VBAT_L = 0x22,
     PMIC_DEVICE_ID = 0x50,
     PMIC_DEVICE_MODEL = 0x20,
+    PMIC_LDO_3V3_ENABLE_BIT = UINT8_C(1) << 2,
     PMIC_GPIO4_BIT = UINT8_C(1) << 4,
+    PMIC_LDO_3V3_HOLD_BIT = UINT8_C(1) << 5,
     PMIC_STATUS_LED_BIT = UINT8_C(1) << 4,
     PMIC_GPIO4_PULL_MASK = UINT8_C(0x03),
     PMIC_SYS_CMD_POWEROFF = 0xA1,
     I2C_TIMEOUT_MS = 100,
+    MOTION_WAKE_IDLE_RETRIES = 20U,
 };
+static const TickType_t MOTION_WAKE_IDLE_WAIT_TICKS = pdMS_TO_TICKS(10);
 
 typedef enum {
     STATE_CLOSED,
@@ -115,6 +120,21 @@ static power_error_t validate_handle(const power_handle_t *handle, const char *o
     if (is_ready(handle)) return POWER_OK;
     ESP_LOGE(TAG, "%s in invalid state", operation);
     return POWER_ERR_INVALID_STATE;
+}
+
+/* The falling-edge wake detector must be armed from an inactive, high INT1 level. */
+static power_error_t wait_for_motion_wake_idle(void)
+{
+    for (unsigned attempt = 0; attempt < MOTION_WAKE_IDLE_RETRIES; ++attempt) {
+        uint8_t gpio_input;
+        power_error_t result = read_register(REG_GPIO_IN, &gpio_input, sizeof(gpio_input));
+        if (result != POWER_OK) return result;
+        if ((gpio_input & PMIC_GPIO4_BIT) != 0U) return POWER_OK;
+        vTaskDelay(MOTION_WAKE_IDLE_WAIT_TICKS);
+    }
+
+    ESP_LOGE(TAG, "refusing power-off: BMI270 INT1 remains active on PMIC GPIO4");
+    return POWER_ERR_CONFIGURATION;
 }
 
 power_error_t power_open(const power_config_t *config, power_handle_t **handle)
@@ -266,33 +286,43 @@ power_error_t power_configure_motion_wake(power_handle_t *handle, power_wake_edg
     const uint8_t pull_value = pull == POWER_WAKE_PULL_UP ? 0x01U :
                                pull == POWER_WAKE_PULL_DOWN ? 0x02U : 0x00U;
     const uint8_t edge_value = edge == POWER_WAKE_EDGE_RISING ? PMIC_GPIO4_BIT : 0U;
-    const uint8_t hold_value = pull == POWER_WAKE_PULL_NONE ? 0U : PMIC_GPIO4_BIT;
+    const uint8_t hold_mask = PMIC_GPIO4_BIT | PMIC_LDO_3V3_HOLD_BIT;
+    const uint8_t hold_value = PMIC_LDO_3V3_HOLD_BIT |
+                               (pull == POWER_WAKE_PULL_NONE ? 0U : PMIC_GPIO4_BIT);
 
     /* Disable wake while GPIO4 is reconfigured so a pull or edge change cannot
-     * produce a false power-on. Configure the input completely, retain its pull
-     * through power-off when needed, clear a stale motion wake, then enable wake
-     * last. The read-backs make an I2C or PMIC configuration failure visible. */
+     * produce a false power-on. Keep the BMI270's L1 supply enabled and retain
+     * both that supply and GPIO4's pull through power-off. Clear a stale motion
+     * wake, then enable wake last. */
     lock();
     result = update_register(REG_GPIO_WAKE_EN, PMIC_GPIO4_BIT, 0U);
+    if (result == POWER_OK) {
+        result = update_register(REG_PWR_CFG, PMIC_LDO_3V3_ENABLE_BIT,
+                                 PMIC_LDO_3V3_ENABLE_BIT);
+    }
     if (result == POWER_OK) result = update_register(REG_GPIO_FUNC_1, PMIC_GPIO4_PULL_MASK, 0U);
     if (result == POWER_OK) result = update_register(REG_GPIO_MODE, PMIC_GPIO4_BIT, 0U);
     if (result == POWER_OK) result = update_register(REG_GPIO_PU_PD_1, PMIC_GPIO4_PULL_MASK, pull_value);
-    if (result == POWER_OK) result = update_register(REG_HOLD_CFG, PMIC_GPIO4_BIT, hold_value);
+    if (result == POWER_OK) result = update_register(REG_HOLD_CFG, hold_mask, hold_value);
     if (result == POWER_OK) result = update_register(REG_GPIO_WAKE_CFG, PMIC_GPIO4_BIT, edge_value);
     if (result == POWER_OK) result = write_register(REG_WAKE_SRC, POWER_WAKE_EXTERNAL);
     if (result == POWER_OK) result = update_register(REG_GPIO_WAKE_EN, PMIC_GPIO4_BIT, PMIC_GPIO4_BIT);
+    if (result == POWER_OK) {
+        result = verify_register_bits(REG_PWR_CFG, PMIC_LDO_3V3_ENABLE_BIT,
+                                      PMIC_LDO_3V3_ENABLE_BIT);
+    }
     if (result == POWER_OK) result = verify_register_bits(REG_GPIO_WAKE_EN, PMIC_GPIO4_BIT, PMIC_GPIO4_BIT);
     if (result == POWER_OK) result = verify_register_bits(REG_GPIO_WAKE_CFG, PMIC_GPIO4_BIT, edge_value);
     if (result == POWER_OK) result = verify_register_bits(REG_GPIO_PU_PD_1, PMIC_GPIO4_PULL_MASK, pull_value);
-    if (result == POWER_OK) result = verify_register_bits(REG_HOLD_CFG, PMIC_GPIO4_BIT, hold_value);
+    if (result == POWER_OK) result = verify_register_bits(REG_HOLD_CFG, hold_mask, hold_value);
     unlock();
 
     if (result == POWER_OK) {
         const char *const edge_name = edge == POWER_WAKE_EDGE_RISING ? "rising" : "falling";
         const char *const pull_name = pull == POWER_WAKE_PULL_UP ? "up" :
                                       pull == POWER_WAKE_PULL_DOWN ? "down" : "none";
-        ESP_LOGI(TAG, "motion wake armed: PMIC GPIO4, %s edge, pull=%s, hold=%s", edge_name,
-                 pull_name, hold_value != 0U ? "yes" : "no");
+        ESP_LOGI(TAG, "motion wake armed: PMIC GPIO4, %s edge, pull=%s, IMU LDO retained",
+                 edge_name, pull_name);
     }
     return result;
 }
@@ -305,9 +335,11 @@ power_error_t power_disable_motion_wake(power_handle_t *handle)
     lock();
     result = update_register(REG_GPIO_WAKE_EN, PMIC_GPIO4_BIT, 0U);
     if (result == POWER_OK) result = update_register(REG_GPIO_PU_PD_1, PMIC_GPIO4_PULL_MASK, 0U);
-    if (result == POWER_OK) result = update_register(REG_HOLD_CFG, PMIC_GPIO4_BIT, 0U);
+    if (result == POWER_OK) {
+        result = update_register(REG_HOLD_CFG, PMIC_GPIO4_BIT | PMIC_LDO_3V3_HOLD_BIT, 0U);
+    }
     unlock();
-    if (result == POWER_OK) ESP_LOGI(TAG, "motion wake disabled: PMIC GPIO4");
+    if (result == POWER_OK) ESP_LOGI(TAG, "motion wake disabled: PMIC GPIO4 and IMU LDO hold");
     return result;
 }
 
@@ -316,15 +348,40 @@ power_error_t power_off(power_handle_t *handle)
     power_error_t result = validate_handle(handle, "power-off");
     if (result != POWER_OK) return result;
 
-    ESP_LOGW(TAG, "entering PMIC power-off; waiting for configured wake source");
     lock();
     uint8_t wake_enable;
+    uint8_t power_config;
+    uint8_t hold_config;
     result = read_register(REG_GPIO_WAKE_EN, &wake_enable, sizeof(wake_enable));
     if (result == POWER_OK && (wake_enable & PMIC_GPIO4_BIT) == 0U) {
         ESP_LOGE(TAG, "refusing power-off: PMIC GPIO4 motion wake is not armed");
         result = POWER_ERR_CONFIGURATION;
     }
-    if (result == POWER_OK) result = write_register(REG_SYS_CMD, PMIC_SYS_CMD_POWEROFF);
+    if (result == POWER_OK) {
+        result = read_register(REG_PWR_CFG, &power_config, sizeof(power_config));
+    }
+    if (result == POWER_OK && (power_config & PMIC_LDO_3V3_ENABLE_BIT) == 0U) {
+        ESP_LOGE(TAG, "refusing power-off: BMI270 L1 supply is disabled");
+        result = POWER_ERR_CONFIGURATION;
+    }
+    if (result == POWER_OK) {
+        result = read_register(REG_HOLD_CFG, &hold_config, sizeof(hold_config));
+    }
+    if (result == POWER_OK &&
+        (hold_config & PMIC_LDO_3V3_HOLD_BIT) == 0U) {
+        ESP_LOGE(TAG, "refusing power-off: BMI270 L1 supply is not retained");
+        result = POWER_ERR_CONFIGURATION;
+    }
+    if (result == POWER_OK) result = wait_for_motion_wake_idle();
+    if (result == POWER_OK) {
+        /* A motion event while the ESP32 was running can leave this latched.
+         * Clear it only after INT1 is high, immediately before shutdown. */
+        result = write_register(REG_WAKE_SRC, POWER_WAKE_EXTERNAL);
+    }
+    if (result == POWER_OK) {
+        ESP_LOGW(TAG, "entering PMIC power-off; BMI270 L1 retained for motion wake");
+        result = write_register(REG_SYS_CMD, PMIC_SYS_CMD_POWEROFF);
+    }
     unlock();
     if (result != POWER_OK) return result;
 
