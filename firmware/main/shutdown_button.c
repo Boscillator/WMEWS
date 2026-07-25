@@ -18,7 +18,7 @@ static const TickType_t DEBOUNCE_TICKS = pdMS_TO_TICKS(40);
 static const TickType_t RELEASE_POLL_TICKS = pdMS_TO_TICKS(10);
 
 struct shutdown_button_context {
-    power_handle_t *power;
+    session_controller_t *session;
     TaskHandle_t task;
     bool initialized;
     bool started;
@@ -59,20 +59,18 @@ static void shutdown_task(void *argument)
         }
 
         ESP_LOGW(TAG, "KEY2 pressed; requesting PMIC shutdown");
-        const power_error_t power_result = power_off(context->power);
-        if (power_result != POWER_OK) {
-            const shutdown_button_error_t result = SHUTDOWN_BUTTON_ERR_PMIC_SHUTDOWN;
-            ESP_LOGE(TAG, "PMIC shutdown failed: module=%d, power=%d", result, power_result);
+        if (session_controller_request_manual_shutdown(context->session) != SESSION_CONTROLLER_OK) {
+            ESP_LOGE(TAG, "Could not request manual shutdown");
         }
         wait_for_key_release();
     }
 }
 
-shutdown_button_error_t shutdown_button_initialize(power_handle_t *power,
+shutdown_button_error_t shutdown_button_initialize(session_controller_t *session,
                                                    shutdown_button_context_t **context)
 {
-    if (power == NULL || context == NULL) {
-        ESP_LOGE(TAG, "initialization requires PMIC and context output");
+    if (session == NULL || context == NULL) {
+        ESP_LOGE(TAG, "initialization requires session controller and context output");
         return SHUTDOWN_BUTTON_ERR_INVALID_ARGUMENT;
     }
     if (s_context.initialized) {
@@ -104,7 +102,7 @@ shutdown_button_error_t shutdown_button_initialize(power_handle_t *power,
         return SHUTDOWN_BUTTON_ERR_GPIO_ISR;
     }
 
-    s_context.power = power;
+    s_context.session = session;
     s_context.initialized = true;
     *context = &s_context;
     return SHUTDOWN_BUTTON_OK;

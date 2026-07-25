@@ -11,8 +11,10 @@
 
 #include "bmi270.h"
 #include "data_recorder.h"
+#include "imu_pipeline.h"
 #include "network.h"
 #include "power.h"
+#include "session_controller.h"
 #include "shutdown_button.h"
 #include "uploader.h"
 
@@ -20,6 +22,7 @@ static const char *TAG = "wmews";
 static bmi270_handle_t *s_bmi270;
 static power_handle_t *s_power;
 static shutdown_button_context_t *s_shutdown_button;
+static session_controller_t *s_session_controller;
 static i2c_master_bus_handle_t s_i2c_bus;
 static TaskHandle_t s_boot_led_task;
 static StaticSemaphore_t s_boot_led_stopped_storage;
@@ -228,8 +231,19 @@ void app_main(void)
         return;
     }
 
+    session_controller_error_t session_result =
+        session_controller_initialize(s_power, &s_session_controller);
+    if (session_result == SESSION_CONTROLLER_OK) {
+        session_result = session_controller_start(s_session_controller);
+    }
+    if (session_result != SESSION_CONTROLLER_OK) {
+        ESP_LOGE(TAG, "Session controller setup failed: %d", session_result);
+        cleanup_sensor_bus();
+        return;
+    }
+
     shutdown_button_error_t shutdown_button_result =
-        shutdown_button_initialize(s_power, &s_shutdown_button);
+        shutdown_button_initialize(s_session_controller, &s_shutdown_button);
     if (shutdown_button_result == SHUTDOWN_BUTTON_OK) {
         shutdown_button_result = shutdown_button_start(s_shutdown_button);
     }
@@ -239,16 +253,25 @@ void app_main(void)
         return;
     }
 
-    uploader_handoff_t handoff;
-    data_recorder_error_t recorder_result = data_recorder_initialize(&handoff);
+    imu_buffer_pool_t pool;
+    data_recorder_error_t recorder_result = data_recorder_initialize(&pool);
     if (recorder_result != DATA_RECORDER_OK) {
         ESP_LOGE(TAG, "Recorder initialization failed: %d", recorder_result);
         cleanup_sensor_bus();
         return;
     }
 
+    imu_pipeline_context_t *pipeline;
+    imu_pipeline_error_t pipeline_result = imu_pipeline_initialize(&pool, &pipeline);
+    if (pipeline_result != IMU_PIPELINE_OK) {
+        ESP_LOGE(TAG, "IMU pipeline initialization failed: %d", pipeline_result);
+        cleanup_sensor_bus();
+        return;
+    }
+
     uploader_context_t *uploader;
-    uploader_error_t uploader_result = uploader_initialize(&handoff, s_power, &uploader);
+    uploader_error_t uploader_result =
+        uploader_initialize(&pool, s_power, s_session_controller, &uploader);
     if (uploader_result != UPLOADER_OK) {
         ESP_LOGE(TAG, "Uploader initialization failed: %d", uploader_result);
         cleanup_sensor_bus();
@@ -260,9 +283,15 @@ void app_main(void)
         cleanup_sensor_bus();
         return;
     }
+    pipeline_result = imu_pipeline_start(pipeline);
+    if (pipeline_result != IMU_PIPELINE_OK) {
+        ESP_LOGE(TAG, "IMU pipeline startup failed: %d", pipeline_result);
+        cleanup_sensor_bus();
+        return;
+    }
 
     stop_boot_led();
-    recorder_result = data_recorder_start(s_bmi270, &handoff);
+    recorder_result = data_recorder_start(s_bmi270, &pool, s_session_controller);
     if (recorder_result != DATA_RECORDER_OK) {
         ESP_LOGE(TAG, "Recorder startup failed: %d", recorder_result);
         cleanup_sensor_bus();

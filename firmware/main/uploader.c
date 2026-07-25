@@ -25,8 +25,9 @@ enum {
 static const TickType_t SERIAL_YIELD_TICKS = 1U;
 
 struct uploader_context {
-    uploader_handoff_t handoff;
+    imu_buffer_pool_t pool;
     power_handle_t *power;
+    session_controller_t *session;
     uint8_t output_buffer[UPLOADER_OUTPUT_BUFFER_SIZE];
     size_t output_length;
     uploader_json_writer_t transport_writer;
@@ -129,7 +130,7 @@ static void initialize_output_buffer(uploader_context_t *context, uploader_json_
     context->transport_context = transport_context;
 }
 
-static uploader_json_error_t emit_capture(const acceleration_window_t *window,
+static uploader_json_error_t emit_capture(const imu_window_t *window,
                                           const uploader_json_metadata_t *metadata, const char *end_time,
                                           uploader_json_writer_t writer, void *writer_context)
 {
@@ -157,20 +158,24 @@ static uploader_json_error_t emit_capture(const acceleration_window_t *window,
     return result;
 }
 
-static void return_window_or_retry(const uploader_context_t *context, const acceleration_window_t *window)
+static void complete_window_or_retry(const uploader_context_t *context, const imu_window_t *window)
 {
-    while (xQueueSend(context->handoff.free_queue, window, RETURN_RETRY_TICKS) != pdPASS) {
+    while (xQueueSend(context->pool.free_queue, window, RETURN_RETRY_TICKS) != pdPASS) {
         ESP_LOGE(TAG, "Fatal ownership invariant violation: could not return buffer; retrying");
+    }
+    if (window->shutdown_after_upload &&
+        session_controller_notify_final_upload_complete(context->session) != SESSION_CONTROLLER_OK) {
+        ESP_LOGE(TAG, "Could not report final upload completion");
     }
 }
 
 static void uploader_task(void *argument)
 {
     uploader_context_t *const context = argument;
-    acceleration_window_t window;
+    imu_window_t window;
 
     for (;;) {
-        if (xQueueReceive(context->handoff.ready_queue, &window, portMAX_DELAY) != pdPASS) {
+        if (xQueueReceive(context->pool.upload_queue, &window, portMAX_DELAY) != pdPASS) {
             continue;
         }
 
@@ -182,7 +187,7 @@ static void uploader_task(void *argument)
                      (void *)window.samples, (unsigned)window.count, (unsigned)window.capacity,
                      (unsigned)window.sample_rate_hz, (long long)window.start_time,
                      (long long)window.end_time);
-            return_window_or_retry(context, &window);
+            complete_window_or_retry(context, &window);
             continue;
         }
 
@@ -193,7 +198,7 @@ static void uploader_task(void *argument)
             app_description == NULL || app_description->version[0] == '\0' ||
             !format_utc_timestamp(window.end_time, end_time, sizeof(end_time))) {
             ESP_LOGE(TAG, "Could not prepare stream header metadata");
-            return_window_or_retry(context, &window);
+            complete_window_or_retry(context, &window);
             continue;
         }
 
@@ -207,21 +212,21 @@ static void uploader_task(void *argument)
             emit_capture(&window, &metadata, end_time, counting_writer, &counter);
         if (json_result != UPLOADER_JSON_OK || counter.length == 0U) {
             ESP_LOGE(TAG, "Capture counting failed");
-            return_window_or_retry(context, &window);
+            complete_window_or_retry(context, &window);
             continue;
         }
 
         const config_err_t config_result = config_load_credentials(&s_credentials);
         if (config_result != CONFIG_OK) {
             ESP_LOGE(TAG, "Upload URL configuration failed: %d", config_result);
-            return_window_or_retry(context, &window);
+            complete_window_or_retry(context, &window);
             continue;
         }
         uploader_http_error_t http_result =
             uploader_http_get_upload_url(&s_credentials, s_upload_url, sizeof(s_upload_url));
         if (http_result != UPLOADER_HTTP_OK) {
             ESP_LOGE(TAG, "Upload URL request failed: %d", http_result);
-            return_window_or_retry(context, &window);
+            complete_window_or_retry(context, &window);
             continue;
         }
 
@@ -229,7 +234,7 @@ static void uploader_task(void *argument)
         http_result = uploader_http_upload_start(&s_upload_session, s_upload_url, counter.length);
         if (http_result != UPLOADER_HTTP_OK) {
             ESP_LOGE(TAG, "Upload start failed: %d", http_result);
-            return_window_or_retry(context, &window);
+            complete_window_or_retry(context, &window);
             continue;
         }
         ESP_LOGI(TAG, "Upload started: %u bytes", (unsigned)counter.length);
@@ -254,16 +259,16 @@ static void uploader_task(void *argument)
                 ESP_LOGE(TAG, "Upload failed: %d", http_result);
             }
         }
-        return_window_or_retry(context, &window);
+        complete_window_or_retry(context, &window);
     }
 }
 
-uploader_error_t uploader_initialize(const uploader_handoff_t *handoff, power_handle_t *power,
-                                     uploader_context_t **context)
+uploader_error_t uploader_initialize(const imu_buffer_pool_t *pool, power_handle_t *power,
+                                     session_controller_t *session, uploader_context_t **context)
 {
-    if (handoff == NULL || power == NULL || context == NULL || handoff->free_queue == NULL ||
-        handoff->ready_queue == NULL) {
-        ESP_LOGE(TAG, "Initialize failed: invalid handoff or output context");
+    if (pool == NULL || power == NULL || session == NULL || context == NULL || pool->free_queue == NULL ||
+        pool->pipeline_queue == NULL || pool->upload_queue == NULL) {
+        ESP_LOGE(TAG, "Initialize failed: invalid buffer pool or output context");
         return UPLOADER_ERR_INVALID_ARGUMENT;
     }
     if (s_context.initialized) {
@@ -271,8 +276,9 @@ uploader_error_t uploader_initialize(const uploader_handoff_t *handoff, power_ha
         return UPLOADER_ERR_INVALID_STATE;
     }
 
-    s_context.handoff = *handoff;
+    s_context.pool = *pool;
     s_context.power = power;
+    s_context.session = session;
     s_context.initialized = true;
     *context = &s_context;
     return UPLOADER_OK;

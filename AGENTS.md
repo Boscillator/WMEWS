@@ -11,6 +11,7 @@
 - Never apply or plan yourself
 
 # C Instructions
+- All function declarations in headers should have doc comments.
 - Break code into modules (module.h/module.c) that do one thing each
 - Each module should have it's own error enum
 - Follow esp idf conventions

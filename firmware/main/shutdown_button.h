@@ -1,6 +1,6 @@
 #pragma once
 
-#include "power.h"
+#include "session_controller.h"
 
 typedef enum {
     SHUTDOWN_BUTTON_OK = 0,
@@ -14,8 +14,8 @@ typedef enum {
 
 typedef struct shutdown_button_context shutdown_button_context_t;
 
-/** Configure the KEY2 listener using the application-owned PMIC handle. */
-shutdown_button_error_t shutdown_button_initialize(power_handle_t *power,
+/** Configure the KEY2 listener using the application-owned session controller. */
+shutdown_button_error_t shutdown_button_initialize(session_controller_t *session,
                                                    shutdown_button_context_t **context);
 /** Start the KEY2 shutdown task after its listener has been initialized. */
 shutdown_button_error_t shutdown_button_start(shutdown_button_context_t *context);
