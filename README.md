@@ -6,7 +6,7 @@ and machine learning.
 
 Secondary Goal: Learn AWS ML-Ops.
 
-✨Written by LLMs; each line lovingly reviewered by hand.
+✨Written by LLMs; lovingly reviewered by hand.✨
 
 ## Project Architecture
 ### IOT Device
@@ -19,8 +19,5 @@ Secondary Goal: Learn AWS ML-Ops.
 - IOT device calls lambda function to get pre-signed URL for S3 upload
 - IOT device uploads chucnked protobuf files to cloud
 
-## Current Limitations
-- M5StickS3 is in the mail, currently limited to ESP32-S3-WROOM dev kit with no
-  imu.
 
 
