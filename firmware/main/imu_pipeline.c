@@ -43,7 +43,10 @@ static void imu_pipeline_task(void *argument)
         ESP_LOGD(TAG, "Window features: samples=%u max_delta=%u", (unsigned)features.sample_count,
                  (unsigned)features.max_axis_delta_lsb);
 
-        /* A local model consumes `features` here; raw-window ownership remains unchanged. */
+        window.features = features;
+        window.features_valid = true;
+
+        /* A local model may consume window.features here; raw-window ownership remains unchanged. */
         if (xQueueSend(context->pool.upload_queue, &window, portMAX_DELAY) != pdPASS) {
             ESP_LOGE(TAG, "Could not transfer processed window to uploader");
             return_window_or_retry(context, &window);

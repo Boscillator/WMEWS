@@ -15,6 +15,18 @@ typedef struct {
     int16_t accel_z;
 } acceleration_sample_t;
 
+/** Stable per-window features computed by the feature-pipeline task. */
+typedef struct {
+    uint32_t sample_count;
+    int32_t mean_accel_x;
+    int32_t mean_accel_y;
+    int32_t mean_accel_z;
+    uint32_t mean_square_accel_x;
+    uint32_t mean_square_accel_y;
+    uint32_t mean_square_accel_z;
+    uint32_t max_axis_delta_lsb;
+} imu_feature_vector_t;
+
 /** A fixed acquisition buffer whose ownership moves through the IMU pipeline queues. */
 typedef struct {
     acceleration_sample_t *samples;
@@ -27,6 +39,10 @@ typedef struct {
     time_t button_pressed_at;
     /** The controller powers down after this window has completed its upload attempt. */
     bool shutdown_after_upload;
+    /** Features calculated for this exact window by the feature pipeline. */
+    imu_feature_vector_t features;
+    /** True only after the feature pipeline has populated `features`. */
+    bool features_valid;
 } imu_window_t;
 
 /** Queues that implement exclusive ownership: free -> pipeline -> upload -> free. */

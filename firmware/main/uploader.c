@@ -5,11 +5,11 @@
 #include <string.h>
 #include <time.h>
 
-#include "esp_app_desc.h"
 #include "esp_log.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 
+#include "capture_metadata.h"
 #include "config.h"
 #include "uploader_http.h"
 #include "uploader_json.h"
@@ -180,7 +180,8 @@ static void uploader_task(void *argument)
         }
 
         if (window.samples == NULL || window.count == 0U || window.count > window.capacity ||
-            window.sample_rate_hz == 0U || window.start_time == (time_t)-1 ||
+            window.sample_rate_hz == 0U || !window.features_valid ||
+            window.features.sample_count != window.count || window.start_time == (time_t)-1 ||
             window.end_time == (time_t)-1) {
             ESP_LOGE(TAG,
                      "Received invalid window: samples=%p count=%u capacity=%u rate=%uHz start=%lld end=%lld",
@@ -194,9 +195,7 @@ static void uploader_task(void *argument)
         char start_time[sizeof("YYYY-MM-DDTHH:MM:SSZ")];
         char end_time[sizeof("YYYY-MM-DDTHH:MM:SSZ")];
         char button_pressed_at[sizeof("YYYY-MM-DDTHH:MM:SSZ")];
-        const esp_app_desc_t *app_description = esp_app_get_description();
         if (!format_utc_timestamp(window.start_time, start_time, sizeof(start_time)) ||
-            app_description == NULL || app_description->version[0] == '\0' ||
             !format_utc_timestamp(window.end_time, end_time, sizeof(end_time)) ||
             (window.button_pressed_at != (time_t)-1 &&
              !format_utc_timestamp(window.button_pressed_at, button_pressed_at,
@@ -206,12 +205,20 @@ static void uploader_task(void *argument)
             continue;
         }
 
-        const uploader_json_metadata_t metadata = {
+        uploader_json_metadata_t metadata = {
             .start_time = start_time,
             .button_pressed_at = window.button_pressed_at == (time_t)-1 ? NULL : button_pressed_at,
-            .firmware_version = app_description->version,
             .sample_rate_hz = window.sample_rate_hz,
+            .features = &window.features,
         };
+        const capture_metadata_error_t metadata_result =
+            capture_metadata_collect(&context->pool, context->power, &metadata);
+        if (metadata_result != CAPTURE_METADATA_OK || metadata.firmware_version == NULL ||
+            metadata.firmware_version[0] == '\0') {
+            ESP_LOGE(TAG, "Could not collect stream header metadata: %d", metadata_result);
+            complete_window_or_retry(context, &window);
+            continue;
+        }
         counting_writer_context_t counter = {0};
         uploader_json_error_t json_result =
             emit_capture(&window, &metadata, end_time, counting_writer, &counter);

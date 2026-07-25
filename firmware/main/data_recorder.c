@@ -80,6 +80,7 @@ static void recorder_task(void *argument)
         window.end_time = (time_t)-1;
         window.button_pressed_at = (time_t)-1;
         window.shutdown_after_upload = false;
+        window.features_valid = false;
 
         discard_stale_button_events(context);
 
@@ -207,6 +208,7 @@ data_recorder_error_t data_recorder_initialize(imu_buffer_pool_t *pool)
             .end_time = (time_t)-1,
             .button_pressed_at = (time_t)-1,
             .shutdown_after_upload = false,
+            .features_valid = false,
         };
         if (xQueueSend(free_queue, &window, 0U) != pdPASS) {
             ESP_LOGE(TAG, "Initialize failed: could not seed free buffer queue");
