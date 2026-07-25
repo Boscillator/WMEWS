@@ -17,6 +17,8 @@ typedef enum {
 /** Extensible metadata used to build an NDJSON stream header. */
 typedef struct {
     const char *start_time;
+    /** Optional ISO-8601 UTC timestamp for the first accepted KEY1 press. */
+    const char *button_pressed_at;
     const char *firmware_version;
     uint32_t sample_rate_hz;
 } uploader_json_metadata_t;

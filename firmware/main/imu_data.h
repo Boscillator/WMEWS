@@ -23,6 +23,8 @@ typedef struct {
     uint32_t sample_rate_hz;
     time_t start_time;
     time_t end_time;
+    /** First accepted KEY1 press timestamp, or `(time_t)-1` if no press occurred. */
+    time_t button_pressed_at;
     /** The controller powers down after this window has completed its upload attempt. */
     bool shutdown_after_upload;
 } imu_window_t;

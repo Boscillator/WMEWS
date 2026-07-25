@@ -20,4 +20,4 @@ data_recorder_error_t data_recorder_initialize(imu_buffer_pool_t *pool);
 
 /** Start the recorder task. The recorder is the only task that accesses `sensor`. */
 data_recorder_error_t data_recorder_start(bmi270_handle_t *sensor, const imu_buffer_pool_t *pool,
-                                          session_controller_t *session);
+                                          session_controller_t *session, QueueHandle_t button_press_queue);

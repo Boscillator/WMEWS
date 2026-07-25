@@ -193,10 +193,14 @@ static void uploader_task(void *argument)
 
         char start_time[sizeof("YYYY-MM-DDTHH:MM:SSZ")];
         char end_time[sizeof("YYYY-MM-DDTHH:MM:SSZ")];
+        char button_pressed_at[sizeof("YYYY-MM-DDTHH:MM:SSZ")];
         const esp_app_desc_t *app_description = esp_app_get_description();
         if (!format_utc_timestamp(window.start_time, start_time, sizeof(start_time)) ||
             app_description == NULL || app_description->version[0] == '\0' ||
-            !format_utc_timestamp(window.end_time, end_time, sizeof(end_time))) {
+            !format_utc_timestamp(window.end_time, end_time, sizeof(end_time)) ||
+            (window.button_pressed_at != (time_t)-1 &&
+             !format_utc_timestamp(window.button_pressed_at, button_pressed_at,
+                                   sizeof(button_pressed_at)))) {
             ESP_LOGE(TAG, "Could not prepare stream header metadata");
             complete_window_or_retry(context, &window);
             continue;
@@ -204,6 +208,7 @@ static void uploader_task(void *argument)
 
         const uploader_json_metadata_t metadata = {
             .start_time = start_time,
+            .button_pressed_at = window.button_pressed_at == (time_t)-1 ? NULL : button_pressed_at,
             .firmware_version = app_description->version,
             .sample_rate_hz = window.sample_rate_hz,
         };

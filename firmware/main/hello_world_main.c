@@ -10,6 +10,7 @@
 #include "freertos/task.h"
 
 #include "bmi270.h"
+#include "capture_button.h"
 #include "data_recorder.h"
 #include "imu_pipeline.h"
 #include "network.h"
@@ -22,6 +23,7 @@ static const char *TAG = "wmews";
 static bmi270_handle_t *s_bmi270;
 static power_handle_t *s_power;
 static shutdown_button_context_t *s_shutdown_button;
+static capture_button_context_t *s_capture_button;
 static session_controller_t *s_session_controller;
 static i2c_master_bus_handle_t s_i2c_bus;
 static TaskHandle_t s_boot_led_task;
@@ -300,6 +302,18 @@ void app_main(void)
         return;
     }
 
+    QueueHandle_t button_press_queue;
+    capture_button_error_t capture_button_result =
+        capture_button_initialize(&s_capture_button, &button_press_queue);
+    if (capture_button_result == CAPTURE_BUTTON_OK) {
+        capture_button_result = capture_button_start(s_capture_button);
+    }
+    if (capture_button_result != CAPTURE_BUTTON_OK) {
+        ESP_LOGE(TAG, "KEY1 capture listener setup failed: %d", capture_button_result);
+        cleanup_sensor_bus();
+        return;
+    }
+
     imu_buffer_pool_t pool;
     data_recorder_error_t recorder_result = data_recorder_initialize(&pool);
     if (recorder_result != DATA_RECORDER_OK) {
@@ -342,7 +356,7 @@ void app_main(void)
         cleanup_sensor_bus();
         return;
     }
-    recorder_result = data_recorder_start(s_bmi270, &pool, s_session_controller);
+    recorder_result = data_recorder_start(s_bmi270, &pool, s_session_controller, button_press_queue);
     if (recorder_result != DATA_RECORDER_OK) {
         ESP_LOGE(TAG, "Recorder startup failed: %d", recorder_result);
         cleanup_sensor_bus();

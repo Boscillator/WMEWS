@@ -25,6 +25,7 @@ typedef struct recorder_context {
     bmi270_handle_t *sensor;
     imu_buffer_pool_t pool;
     session_controller_t *session;
+    QueueHandle_t button_press_queue;
     idle_detector_t idle_detector;
     size_t window_capacity;
     uint32_t sample_rate_hz;
@@ -34,6 +35,25 @@ typedef struct recorder_context {
 
 static acceleration_sample_t s_window_storage[BUFFER_COUNT][WINDOW_MAX_SAMPLES];
 static recorder_context_t s_context;
+
+static void discard_stale_button_events(const recorder_context_t *context)
+{
+    time_t pressed_at;
+    while (xQueueReceive(context->button_press_queue, &pressed_at, 0U) == pdPASS) {
+        ESP_LOGD(TAG, "Discarded KEY1 press outside a capture window");
+    }
+}
+
+static void record_button_events(const recorder_context_t *context, imu_window_t *window)
+{
+    time_t pressed_at;
+    while (xQueueReceive(context->button_press_queue, &pressed_at, 0U) == pdPASS) {
+        if (window->button_pressed_at == (time_t)-1) {
+            window->button_pressed_at = pressed_at;
+            ESP_LOGI(TAG, "Recorded first KEY1 press for capture window");
+        }
+    }
+}
 
 static void return_window_to_free_queue(const recorder_context_t *context, const imu_window_t *window)
 {
@@ -58,7 +78,10 @@ static void recorder_task(void *argument)
         window.sample_rate_hz = context->sample_rate_hz;
         window.start_time = (time_t)-1;
         window.end_time = (time_t)-1;
+        window.button_pressed_at = (time_t)-1;
         window.shutdown_after_upload = false;
+
+        discard_stale_button_events(context);
 
         window.start_time = time(NULL);
         if (window.start_time == (time_t)-1) {
@@ -84,6 +107,8 @@ static void recorder_task(void *argument)
                 vTaskDelay(READ_RETRY_TICKS);
                 continue;
             }
+
+            record_button_events(context, &window);
 
             for (size_t index = 0; index < samples_read && window.count < window.capacity; ++index) {
                 if ((scratch[index].flags & BMI270_DATA_ACCEL_VALID) == 0U) {
@@ -122,6 +147,7 @@ static void recorder_task(void *argument)
             }
         }
 
+        record_button_events(context, &window);
         window.end_time = time(NULL);
         if (window.end_time == (time_t)-1) {
             ESP_LOGE(TAG, "Could not read capture end time; discarding window");
@@ -179,6 +205,7 @@ data_recorder_error_t data_recorder_initialize(imu_buffer_pool_t *pool)
             .sample_rate_hz = 0U,
             .start_time = (time_t)-1,
             .end_time = (time_t)-1,
+            .button_pressed_at = (time_t)-1,
             .shutdown_after_upload = false,
         };
         if (xQueueSend(free_queue, &window, 0U) != pdPASS) {
@@ -202,10 +229,10 @@ data_recorder_error_t data_recorder_initialize(imu_buffer_pool_t *pool)
 }
 
 data_recorder_error_t data_recorder_start(bmi270_handle_t *sensor, const imu_buffer_pool_t *pool,
-                                          session_controller_t *session)
+                                          session_controller_t *session, QueueHandle_t button_press_queue)
 {
     if (sensor == NULL || pool == NULL || session == NULL || pool->free_queue == NULL ||
-        pool->pipeline_queue == NULL || pool->upload_queue == NULL) {
+        pool->pipeline_queue == NULL || pool->upload_queue == NULL || button_press_queue == NULL) {
         ESP_LOGE(TAG, "Start failed: invalid sensor, pool, or session");
         return DATA_RECORDER_ERR_INVALID_ARGUMENT;
     }
@@ -225,6 +252,7 @@ data_recorder_error_t data_recorder_start(bmi270_handle_t *sensor, const imu_buf
     s_context.window_capacity = (size_t)sample_rate_hz * WINDOW_DURATION_SECONDS;
     s_context.sample_rate_hz = sample_rate_hz;
     s_context.session = session;
+    s_context.button_press_queue = button_press_queue;
     const idle_detector_error_t idle_result =
         idle_detector_initialize(&s_context.idle_detector, IDLE_MAX_AXIS_DELTA_LSB,
                                  sample_rate_hz * IDLE_DURATION_SECONDS);

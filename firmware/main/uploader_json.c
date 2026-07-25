@@ -44,7 +44,11 @@ uploader_json_error_t uploader_json_emit_header(const uploader_json_metadata_t *
     cJSON *record = cJSON_CreateObject();
     if (record == NULL || cJSON_AddStringToObject(record, "start_time", metadata->start_time) == NULL ||
         cJSON_AddStringToObject(record, "firmware_version", metadata->firmware_version) == NULL ||
-        cJSON_AddNumberToObject(record, "sample_rate_hz", (double)metadata->sample_rate_hz) == NULL) {
+        cJSON_AddNumberToObject(record, "sample_rate_hz", (double)metadata->sample_rate_hz) == NULL ||
+        (metadata->button_pressed_at != NULL &&
+         cJSON_AddStringToObject(record, "button_pressed_at", metadata->button_pressed_at) == NULL) ||
+        (metadata->button_pressed_at == NULL &&
+         cJSON_AddNullToObject(record, "button_pressed_at") == NULL)) {
         ESP_LOGE(TAG, "Header failed: could not allocate JSON record");
         cJSON_Delete(record);
         return UPLOADER_JSON_ERR_ALLOCATION;
