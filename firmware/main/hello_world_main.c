@@ -27,10 +27,15 @@ static i2c_master_bus_handle_t s_i2c_bus;
 static TaskHandle_t s_boot_led_task;
 static StaticSemaphore_t s_boot_led_stopped_storage;
 static SemaphoreHandle_t s_boot_led_stopped;
+static TaskHandle_t s_normal_led_task;
+static StaticSemaphore_t s_normal_led_stopped_storage;
+static SemaphoreHandle_t s_normal_led_stopped;
 
 #define SNTP_SYNC_RETRIES 5
 #define SNTP_SYNC_WAIT_MS 5000
 #define BOOT_LED_HALF_PERIOD_MS 100
+#define NORMAL_LED_FLASH_MS 75
+#define NORMAL_LED_PERIOD_MS 3000
 
 static void boot_led_task(void *argument)
 {
@@ -72,6 +77,47 @@ static void stop_boot_led(void)
     s_boot_led_task = NULL;
 }
 
+static void normal_led_task(void *argument)
+{
+    power_handle_t *const power = argument;
+    TickType_t next_flash = xTaskGetTickCount();
+
+    for (;;) {
+        if (power_flash_status_led(power, NORMAL_LED_FLASH_MS, 1U) != POWER_OK) break;
+        if (ulTaskNotifyTake(pdTRUE, 0U) != 0U) break;
+        vTaskDelayUntil(&next_flash, pdMS_TO_TICKS(NORMAL_LED_PERIOD_MS));
+        if (ulTaskNotifyTake(pdTRUE, 0U) != 0U) break;
+    }
+
+    (void)power_set_status_led(power, false);
+    (void)xSemaphoreGive(s_normal_led_stopped);
+    vTaskDelete(NULL);
+}
+
+static bool start_normal_led(void)
+{
+    s_normal_led_stopped = xSemaphoreCreateBinaryStatic(&s_normal_led_stopped_storage);
+    if (s_normal_led_stopped == NULL) {
+        ESP_LOGE(TAG, "Normal LED completion semaphore initialization failed");
+        return false;
+    }
+    if (xTaskCreate(normal_led_task, "normal_led", 2048U, s_power, 4U, &s_normal_led_task) != pdPASS) {
+        ESP_LOGE(TAG, "Normal LED task creation failed");
+        s_normal_led_task = NULL;
+        return false;
+    }
+    return true;
+}
+
+static void stop_normal_led(void)
+{
+    if (s_normal_led_task == NULL) return;
+
+    (void)xTaskNotifyGive(s_normal_led_task);
+    (void)xSemaphoreTake(s_normal_led_stopped, portMAX_DELAY);
+    s_normal_led_task = NULL;
+}
+
 static esp_err_t initialize_nvs(void)
 {
     esp_err_t err = nvs_flash_init();
@@ -109,6 +155,7 @@ static esp_err_t initialize_i2c_bus(void)
 
 static void cleanup_sensor_bus(void)
 {
+    stop_normal_led();
     stop_boot_led();
     if (s_power != NULL) {
         (void)power_set_status_led(s_power, false);
@@ -291,6 +338,10 @@ void app_main(void)
     }
 
     stop_boot_led();
+    if (!start_normal_led()) {
+        cleanup_sensor_bus();
+        return;
+    }
     recorder_result = data_recorder_start(s_bmi270, &pool, s_session_controller);
     if (recorder_result != DATA_RECORDER_OK) {
         ESP_LOGE(TAG, "Recorder startup failed: %d", recorder_result);

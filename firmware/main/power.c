@@ -45,16 +45,19 @@ typedef enum {
 struct power_handle {
     i2c_master_dev_handle_t device;
     SemaphoreHandle_t lock;
+    SemaphoreHandle_t status_led_lock;
     power_state_t state;
 };
 
 static power_handle_t s_handle;
 static StaticSemaphore_t s_lock_storage;
+static StaticSemaphore_t s_status_led_lock_storage;
 
 static void reset_handle(void)
 {
     memset(&s_handle, 0, sizeof(s_handle));
     s_handle.lock = xSemaphoreCreateMutexStatic(&s_lock_storage);
+    s_handle.status_led_lock = xSemaphoreCreateMutexStatic(&s_status_led_lock_storage);
     s_handle.state = STATE_CLOSED;
 }
 
@@ -113,6 +116,16 @@ static void lock(void)
 static void unlock(void)
 {
     (void)xSemaphoreGive(s_handle.lock);
+}
+
+static void lock_status_led(void)
+{
+    (void)xSemaphoreTake(s_handle.status_led_lock, portMAX_DELAY);
+}
+
+static void unlock_status_led(void)
+{
+    (void)xSemaphoreGive(s_handle.status_led_lock);
 }
 
 static power_error_t validate_handle(const power_handle_t *handle, const char *operation)
@@ -210,32 +223,54 @@ power_error_t power_read_battery_mv(power_handle_t *handle, uint16_t *millivolts
     return POWER_OK;
 }
 
-power_error_t power_set_status_led(power_handle_t *handle, bool enabled)
+static power_error_t set_status_led(power_handle_t *handle, bool enabled)
 {
-    power_error_t result = validate_handle(handle, "status LED control");
-    if (result != POWER_OK) return result;
-
     lock();
-    result = update_register(REG_PWR_CFG, PMIC_STATUS_LED_BIT,
-                             enabled ? PMIC_STATUS_LED_BIT : 0U);
+    const power_error_t result = update_register(REG_PWR_CFG, PMIC_STATUS_LED_BIT,
+                                                  enabled ? PMIC_STATUS_LED_BIT : 0U);
     unlock();
     if (result == POWER_OK) ESP_LOGD(TAG, "status LED %s", enabled ? "on" : "off");
     return result;
 }
 
-power_error_t power_flash_status_led(power_handle_t *handle, uint32_t duration_ms)
+power_error_t power_set_status_led(power_handle_t *handle, bool enabled)
 {
-    if (duration_ms == 0U) {
-        ESP_LOGE(TAG, "status LED flash duration is zero");
+    power_error_t result = validate_handle(handle, "status LED control");
+    if (result != POWER_OK) return result;
+
+    lock_status_led();
+    result = set_status_led(handle, enabled);
+    unlock_status_led();
+    return result;
+}
+
+power_error_t power_flash_status_led(power_handle_t *handle, uint32_t duration_ms,
+                                     uint8_t flash_count)
+{
+    if (duration_ms == 0U || flash_count == 0U) {
+        ESP_LOGE(TAG, "status LED flash pattern has zero duration or count");
         return POWER_ERR_INVALID_ARGUMENT;
     }
 
-    power_error_t result = power_set_status_led(handle, true);
+    power_error_t result = validate_handle(handle, "status LED flash");
     if (result != POWER_OK) return result;
 
-    vTaskDelay(pdMS_TO_TICKS(duration_ms));
-    const power_error_t off_result = power_set_status_led(handle, false);
-    return off_result == POWER_OK ? POWER_OK : off_result;
+    lock_status_led();
+    for (uint8_t flash = 0U; flash < flash_count; ++flash) {
+        result = set_status_led(handle, true);
+        if (result != POWER_OK) break;
+
+        vTaskDelay(pdMS_TO_TICKS(duration_ms));
+        result = set_status_led(handle, false);
+        if (result != POWER_OK || flash + 1U == flash_count) break;
+
+        vTaskDelay(pdMS_TO_TICKS(duration_ms));
+    }
+    if (result != POWER_OK) {
+        (void)set_status_led(handle, false);
+    }
+    unlock_status_led();
+    return result;
 }
 
 power_error_t power_get_wake_sources(power_handle_t *handle, power_wake_flags_t *sources)

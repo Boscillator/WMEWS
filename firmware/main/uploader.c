@@ -252,7 +252,7 @@ static void uploader_task(void *argument)
             http_result = uploader_http_upload_finish(&s_upload_session);
             if (http_result == UPLOADER_HTTP_OK) {
                 ESP_LOGI(TAG, "Upload completed: %u bytes", (unsigned)counter.length);
-                if (power_flash_status_led(context->power, UPLOAD_SUCCESS_FLASH_MS) != POWER_OK) {
+                if (power_flash_status_led(context->power, UPLOAD_SUCCESS_FLASH_MS, 2U) != POWER_OK) {
                     ESP_LOGE(TAG, "Upload-success LED flash failed");
                 }
             } else {
