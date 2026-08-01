@@ -2,7 +2,7 @@
 set -euo pipefail
 
 script_directory="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
-api_directory="${script_directory}/../api"
+api_directory="${script_directory}/../../api"
 build_directory="${script_directory}/.build"
 package_directory="${build_directory}/package"
 requirements_file="${build_directory}/requirements.txt"

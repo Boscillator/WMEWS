@@ -3,14 +3,15 @@ provider "aws" {
 }
 
 locals {
-  api_directory     = abspath("${path.module}/../api")
+  api_directory     = abspath("${path.module}/../../api")
   build_directory   = "${path.module}/.build"
   package_directory = "${local.build_directory}/package"
   package_zip       = "${local.build_directory}/wmews-ingest-api.zip"
   api_build_inputs = {
-    main       = filesha256("${local.api_directory}/main.py")
-    pyproject  = filesha256("${local.api_directory}/pyproject.toml")
-    lockfile   = filesha256("${local.api_directory}/uv.lock")
+    main            = filesha256("${local.api_directory}/main.py")
+    pyproject       = filesha256("${local.api_directory}/pyproject.toml")
+    lockfile        = filesha256("${local.api_directory}/uv.lock")
+    package_missing = !fileexists("${local.package_directory}/main.py")
   }
 }
 

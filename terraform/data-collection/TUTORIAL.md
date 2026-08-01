@@ -1,6 +1,6 @@
 # WMEWS OpenTofu Deployment
 
-This directory deploys the FastAPI/Mangum ingest API as an AWS Lambda Function
+This root deploys the FastAPI/Mangum ingest API as an AWS Lambda Function
 URL and creates a private S3 bucket for future device uploads.
 
 ## Prerequisites
@@ -94,8 +94,10 @@ interim control. Use stronger per-device authentication before production.
 
 ## Update And Teardown
 
-Changing `../api/main.py`, `../api/pyproject.toml`, or `../api/uv.lock` rebuilds
-the Lambda package on the next apply:
+Changing `../../api/main.py`, `../../api/pyproject.toml`, or
+`../../api/uv.lock` rebuilds the Lambda package on the next apply. The package
+also rebuilds automatically when the ignored `.build/package/main.py` artifact
+is absent, including after moving this root to a new checkout:
 
 ```bash
 tofu apply
