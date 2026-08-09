@@ -1,0 +1,60 @@
+name: Firmware CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  host-tests:
+    name: Host unit tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    container:
+      image: espressif/idf:v6.0.1
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Build and run host tests
+        working-directory: firmware/host_test
+        shell: bash
+        run: |
+          . "$IDF_PATH/export.sh"
+          cmake -S . -B build
+          cmake --build build --parallel
+          ctest --test-dir build --output-on-failure
+
+  firmware-build:
+    name: ESP32-S3 firmware build
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    container:
+      image: espressif/idf:v6.0.1
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Create CI-only credentials
+        working-directory: firmware
+        shell: bash
+        run: |
+          cp config.csv.example config.csv
+          sed -i \
+            -e 's/replace-with-wifi-ssid/ci-wifi/' \
+            -e 's/replace-with-wifi-password/ci-password/' \
+            -e 's/replace-with-device-id/ci-device/' \
+            -e 's/replace-with-secret-key/ci-secret/' \
+            -e 's#https://.*#https://example.invalid/upload#' \
+            config.csv
+
+      - name: Build firmware
+        working-directory: firmware
+        shell: bash
+        run: |
+          . "$IDF_PATH/export.sh"
+          idf.py build
