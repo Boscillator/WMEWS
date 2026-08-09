@@ -54,6 +54,23 @@ The build generates an NVS image from the local `config.csv`. A missing local
 CSV intentionally fails the build to avoid compiling credentials into the
 application image.
 
+## Host-based unit tests
+
+The host test suite builds selected hardware-independent modules for Linux. It
+uses ESP-IDF's bundled Unity source and standard CMake/CTest. From the
+host-test project, build and run the suite:
+
+```sh
+cd host_test
+cmake -S . -B build
+cmake --build build
+ctest --test-dir build --output-on-failure
+```
+
+The suite currently contains one dummy test that verifies the test project is
+configured correctly. Add future test sources and the production C sources
+they cover to `host_test/CMakeLists.txt`.
+
 ## Update credentials only
 
 After changing `config.csv`, build and flash only the NVS partition:
