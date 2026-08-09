@@ -15,8 +15,6 @@ enum {
     WINDOW_MAX_SAMPLES = 3000U,
     BUFFER_COUNT = 2U,
     SCRATCH_CAPACITY = 32U,
-    IDLE_MAX_AXIS_DELTA_LSB = 40U,
-    IDLE_DURATION_SECONDS = 15U,
 };
 static const TickType_t READ_RETRY_TICKS = pdMS_TO_TICKS(100);
 static const TickType_t BACKPRESSURE_WAIT_TICKS = pdMS_TO_TICKS(1000);
@@ -29,6 +27,8 @@ typedef struct recorder_context {
     idle_detector_t idle_detector;
     size_t window_capacity;
     uint32_t sample_rate_hz;
+    uint8_t accel_range_g;
+    uint16_t accel_lsb_per_g;
     bool initialized;
     bool started;
 } recorder_context_t;
@@ -76,6 +76,8 @@ static void recorder_task(void *argument)
         window.count = 0U;
         window.capacity = context->window_capacity;
         window.sample_rate_hz = context->sample_rate_hz;
+        window.accel_range_g = context->accel_range_g;
+        window.accel_lsb_per_g = context->accel_lsb_per_g;
         window.start_time = (time_t)-1;
         window.end_time = (time_t)-1;
         window.button_pressed_at = (time_t)-1;
@@ -231,10 +233,12 @@ data_recorder_error_t data_recorder_initialize(imu_buffer_pool_t *pool)
 }
 
 data_recorder_error_t data_recorder_start(bmi270_handle_t *sensor, const imu_buffer_pool_t *pool,
-                                          session_controller_t *session, QueueHandle_t button_press_queue)
+                                          session_controller_t *session, QueueHandle_t button_press_queue,
+                                          const data_recorder_config_t *config)
 {
     if (sensor == NULL || pool == NULL || session == NULL || pool->free_queue == NULL ||
-        pool->pipeline_queue == NULL || pool->upload_queue == NULL || button_press_queue == NULL) {
+        pool->pipeline_queue == NULL || pool->upload_queue == NULL || button_press_queue == NULL ||
+        config == NULL || config->duration_seconds == 0U) {
         ESP_LOGE(TAG, "Start failed: invalid sensor, pool, or session");
         return DATA_RECORDER_ERR_INVALID_ARGUMENT;
     }
@@ -245,19 +249,25 @@ data_recorder_error_t data_recorder_start(bmi270_handle_t *sensor, const imu_buf
     }
 
     const uint32_t sample_rate_hz = bmi270_get_sample_rate_hz(sensor);
-    if (sample_rate_hz == 0U || sample_rate_hz > WINDOW_MAX_SAMPLES / WINDOW_DURATION_SECONDS) {
-        ESP_LOGE(TAG, "Start failed: unsupported sample rate %uHz", (unsigned)sample_rate_hz);
+    const uint8_t accel_range_g = bmi270_get_accel_range_g(sensor);
+    const float accel_lsb = bmi270_get_accel_lsb(sensor);
+    if (sample_rate_hz == 0U || sample_rate_hz > WINDOW_MAX_SAMPLES / WINDOW_DURATION_SECONDS ||
+        accel_range_g == 0U || accel_lsb <= 0.0F || accel_lsb > UINT16_MAX ||
+        config->duration_seconds > UINT32_MAX / sample_rate_hz) {
+        ESP_LOGE(TAG, "Start failed: invalid sensor stream configuration");
         return DATA_RECORDER_ERR_UNSUPPORTED_SAMPLE_RATE;
     }
 
     s_context.sensor = sensor;
     s_context.window_capacity = (size_t)sample_rate_hz * WINDOW_DURATION_SECONDS;
     s_context.sample_rate_hz = sample_rate_hz;
+    s_context.accel_range_g = accel_range_g;
+    s_context.accel_lsb_per_g = (uint16_t)accel_lsb;
     s_context.session = session;
     s_context.button_press_queue = button_press_queue;
     const idle_detector_error_t idle_result =
-        idle_detector_initialize(&s_context.idle_detector, IDLE_MAX_AXIS_DELTA_LSB,
-                                 sample_rate_hz * IDLE_DURATION_SECONDS);
+        idle_detector_initialize(&s_context.idle_detector, config->max_axis_delta_lsb,
+                                 sample_rate_hz * config->duration_seconds);
     if (idle_result != IDLE_DETECTOR_OK) {
         ESP_LOGE(TAG, "Start failed: idle detector initialization failed: %d", idle_result);
         return DATA_RECORDER_ERR_IDLE_DETECTOR;

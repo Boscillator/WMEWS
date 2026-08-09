@@ -73,6 +73,8 @@ typedef struct {
     const char *button_pressed_at;
     const char *firmware_version;
     uint32_t sample_rate_hz;
+    uint8_t accel_range_g;
+    uint16_t accel_lsb_per_g;
     const imu_feature_vector_t *features;
     uploader_json_battery_t battery;
     uploader_json_system_t system;

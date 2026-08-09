@@ -33,6 +33,8 @@ typedef struct {
     size_t count;
     size_t capacity;
     uint32_t sample_rate_hz;
+    uint8_t accel_range_g;
+    uint16_t accel_lsb_per_g;
     time_t start_time;
     time_t end_time;
     /** First accepted KEY1 press timestamp, or `(time_t)-1` if no press occurred. */

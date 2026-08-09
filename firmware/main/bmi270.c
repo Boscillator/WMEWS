@@ -27,9 +27,9 @@ enum {
     PWR_CTRL_ENABLE_ALL = 0x0E, FIFO_HEADER_ACC_GYR = 0x8C,
     FIFO_CONTROL_SKIP = 0x40, FIFO_CONTROL_TIME = 0x44, FIFO_CONTROL_CONFIG = 0x48,
     FIFO_OVERREAD = 0x80, FIFO_CONFIG_0_TIME = 0x02, FIFO_CONFIG_1_HEADER_ACC_GYR = 0xD0,
-    ACC_RANGE_8G = 0x02, GYR_RANGE_2000DPS = 0x00, FIFO_DOWNS_FILTERED = 0x88, CONFIG_IMAGE_SIZE = 8192,
+    GYR_RANGE_2000DPS = 0x00, FIFO_DOWNS_FILTERED = 0x88, CONFIG_IMAGE_SIZE = 8192,
     IMAGE_CHUNK_SIZE = 32, FIFO_BURST_SIZE = 2048, I2C_TIMEOUT_MS = 100,
-    FEATURE_PAGE_ANYMOTION = 0x01, ANYMO_1_DURATION_DEFAULT = 5,
+    FEATURE_PAGE_ANYMOTION = 0x01,
     ANYMO_1_SELECT_ALL_AXES = 0xE000, ANYMO_2_OUT_CONF_BIT_6 = 0x3800,
     ANYMO_2_ENABLE = 0x8000, INT1_OUTPUT_ENABLE = 0x08,
     INT1_ANYMOTION_MAP = 0x40,
@@ -42,6 +42,8 @@ struct bmi270_handle {
     i2c_master_dev_handle_t device;
     uint32_t sample_rate_hz;
     uint32_t sensor_ticks_per_sample;
+    uint8_t accel_range_g;
+    float accel_lsb;
     bmi270_state_t state;
     bool fifo_overrun;
     uint8_t fifo_buffer[FIFO_BURST_SIZE];
@@ -77,6 +79,31 @@ static bool odr_code(uint32_t rate, uint8_t *code)
         if (rates[i].rate == rate) { *code = rates[i].code; return true; }
     }
     return false;
+}
+
+static bool accel_range_config(bmi270_accel_range_t range, uint8_t *register_value,
+                               float *lsb_per_g)
+{
+    switch (range) {
+    case BMI270_ACCEL_RANGE_2G:
+        *register_value = 0x00U;
+        *lsb_per_g = 16384.0F;
+        return true;
+    case BMI270_ACCEL_RANGE_4G:
+        *register_value = 0x01U;
+        *lsb_per_g = 8192.0F;
+        return true;
+    case BMI270_ACCEL_RANGE_8G:
+        *register_value = 0x02U;
+        *lsb_per_g = 4096.0F;
+        return true;
+    case BMI270_ACCEL_RANGE_16G:
+        *register_value = 0x03U;
+        *lsb_per_g = 2048.0F;
+        return true;
+    default:
+        return false;
+    }
 }
 
 static bmi270_error_t transport_result(esp_err_t err, const char *operation, uint8_t reg)
@@ -256,12 +283,14 @@ static bmi270_error_t flush_fifo(void)
 
 uint32_t bmi270_get_sample_rate_hz(const bmi270_handle_t *handle) { return is_live(handle) ? handle->sample_rate_hz : 0; }
 uint32_t bmi270_get_sensor_time_dt_us(const bmi270_handle_t *handle) { return is_live(handle) ? (handle->sensor_ticks_per_sample * 625U) / 16U : 0; }
+uint8_t bmi270_get_accel_range_g(const bmi270_handle_t *handle) { return is_live(handle) ? handle->accel_range_g : 0U; }
 float bmi270_get_gyro_lsb(const bmi270_handle_t *handle) { return is_live(handle) ? 16.384F : 0.0F; }
-float bmi270_get_accel_lsb(const bmi270_handle_t *handle) { return is_live(handle) ? 4096.0F : 0.0F; }
+float bmi270_get_accel_lsb(const bmi270_handle_t *handle) { return is_live(handle) ? handle->accel_lsb : 0.0F; }
 float bmi270_get_temperature_lsb(const bmi270_handle_t *handle) { return is_live(handle) ? 512.0F : 0.0F; }
 
 bmi270_error_t bmi270_enable_anymotion_interrupt(bmi270_handle_t *handle,
-                                                  power_handle_t *power, uint16_t threshold)
+                                                  power_handle_t *power, uint16_t threshold,
+                                                  uint16_t duration_samples)
 {
     if (handle == NULL || power == NULL) {
         ESP_LOGE(TAG, "any-motion enable handle is null");
@@ -276,10 +305,15 @@ bmi270_error_t bmi270_enable_anymotion_interrupt(bmi270_handle_t *handle,
                  BMI270_ANYMOTION_THRESHOLD_MAX);
         return BMI270_ERR_INVALID_CONFIG;
     }
+    if (duration_samples > BMI270_ANYMOTION_DURATION_MAX) {
+        ESP_LOGE(TAG, "any-motion duration %u exceeds %u", duration_samples,
+                 BMI270_ANYMOTION_DURATION_MAX);
+        return BMI270_ERR_INVALID_CONFIG;
+    }
 
     bmi270_error_t result = power_result(power_disable_motion_wake(power), "disarm motion wake");
     if (result == BMI270_OK) {
-        const uint16_t anymo_1 = ANYMO_1_SELECT_ALL_AXES | ANYMO_1_DURATION_DEFAULT;
+        const uint16_t anymo_1 = ANYMO_1_SELECT_ALL_AXES | duration_samples;
         result = write_feature_word(REG_FEATURES_ANYMO_1, anymo_1);
     }
     if (result == BMI270_OK) {
@@ -301,8 +335,8 @@ bmi270_error_t bmi270_enable_anymotion_interrupt(bmi270_handle_t *handle,
         return result;
     }
 
-    ESP_LOGI(TAG, "any-motion enabled: threshold=%u, duration=%u, axes=XYZ", threshold,
-             ANYMO_1_DURATION_DEFAULT);
+    ESP_LOGI(TAG, "any-motion enabled: threshold=%u, duration=%u samples, axes=XYZ",
+             threshold, duration_samples);
     return BMI270_OK;
 }
 
@@ -331,11 +365,14 @@ bmi270_error_t bmi270_disable_anymotion_interrupt(bmi270_handle_t *handle, power
 bmi270_error_t bmi270_open(const bmi270_config_t *config, bmi270_handle_t **handle)
 {
     uint8_t odr;
+    uint8_t accel_range_register;
+    float accel_lsb;
     if (handle == NULL) { ESP_LOGE(TAG, "open output is null"); return BMI270_ERR_INVALID_ARGUMENT; }
     *handle = NULL;
     if (config == NULL || config->bus == NULL || config->i2c_address > 0x7F ||
         config->i2c_clock_hz == 0 || config->i2c_clock_hz > BMI270_I2C_CLOCK_HZ_DEFAULT ||
-        !odr_code(config->sample_rate_hz, &odr)) {
+        !odr_code(config->sample_rate_hz, &odr) ||
+        !accel_range_config(config->accel_range, &accel_range_register, &accel_lsb)) {
         ESP_LOGE(TAG, "invalid BMI270 configuration"); return BMI270_ERR_INVALID_CONFIG;
     }
     if (s_handle.state != STATE_CLOSED) { ESP_LOGE(TAG, "open in invalid state %d", s_handle.state); return BMI270_ERR_INVALID_STATE; }
@@ -343,6 +380,8 @@ bmi270_error_t bmi270_open(const bmi270_config_t *config, bmi270_handle_t **hand
     s_handle.bus = config->bus;
     s_handle.sample_rate_hz = config->sample_rate_hz;
     s_handle.sensor_ticks_per_sample = 25600U / config->sample_rate_hz;
+    s_handle.accel_range_g = (uint8_t)config->accel_range;
+    s_handle.accel_lsb = accel_lsb;
     const i2c_device_config_t device_config = {.dev_addr_length = I2C_ADDR_BIT_LEN_7, .device_address = config->i2c_address, .scl_speed_hz = config->i2c_clock_hz};
     esp_err_t err = i2c_master_bus_add_device(config->bus, &device_config, &s_handle.device);
     if (err != ESP_OK) { ESP_LOGE(TAG, "add device failed: %s", esp_err_to_name(err)); reset_handle(); return BMI270_ERR_TRANSPORT; }
@@ -354,7 +393,7 @@ bmi270_error_t bmi270_open(const bmi270_config_t *config, bmi270_handle_t **hand
     if (result == BMI270_OK) result = upload_configuration();
     if (result == BMI270_OK) result = write_reg(REG_ACC_CONF, (uint8_t)(0xA0 | odr));
     if (result == BMI270_OK) result = write_reg(REG_GYR_CONF, (uint8_t)(0xA0 | odr));
-    if (result == BMI270_OK) result = write_reg(REG_ACC_RANGE, ACC_RANGE_8G);
+    if (result == BMI270_OK) result = write_reg(REG_ACC_RANGE, accel_range_register);
     if (result == BMI270_OK) result = write_reg(REG_GYR_RANGE, GYR_RANGE_2000DPS);
     if (result == BMI270_OK) result = write_reg(REG_FIFO_DOWNS, FIFO_DOWNS_FILTERED);
     if (result == BMI270_OK) result = write_reg(REG_FIFO_CONFIG_0, FIFO_CONFIG_0_TIME);
@@ -365,7 +404,10 @@ bmi270_error_t bmi270_open(const bmi270_config_t *config, bmi270_handle_t **hand
     delay_at_least_ms(45);
     s_handle.state = STATE_READY;
     *handle = &s_handle;
-    ESP_LOGI(TAG, "BMI270 ready: CHIP_ID=0x%02x, ODR=%" PRIu32 "Hz, accel=+-8g gyro=+-2000dps", id, s_handle.sample_rate_hz);
+    ESP_LOGI(TAG, "BMI270 ready: CHIP_ID=0x%02x, ODR=%" PRIu32
+             "Hz, accel=+-%ug (%g LSB/g) gyro=+-2000dps", id,
+             s_handle.sample_rate_hz, (unsigned)s_handle.accel_range_g,
+             (double)s_handle.accel_lsb);
     return BMI270_OK;
 }
 

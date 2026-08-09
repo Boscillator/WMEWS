@@ -39,6 +39,19 @@ static SemaphoreHandle_t s_normal_led_stopped;
 #define NORMAL_LED_FLASH_MS 75
 #define NORMAL_LED_PERIOD_MS 3000
 
+enum {
+    IDLE_MAX_AXIS_DELTA_LSB = 80U,
+    IDLE_DURATION_SECONDS = 15U,
+    ANYMOTION_DURATION_SAMPLES = 3U,
+};
+
+static uint16_t anymotion_threshold_from_idle_lsb(uint16_t idle_delta_lsb,
+                                                  float accel_lsb_per_g)
+{
+    const float idle_delta_mg = (float)idle_delta_lsb * 1000.0F / accel_lsb_per_g;
+    return (uint16_t)(idle_delta_mg / BMI270_ANYMOTION_THRESHOLD_MG_PER_LSB + 0.5F);
+}
+
 static void boot_led_task(void *argument)
 {
     power_handle_t *const power = argument;
@@ -272,8 +285,17 @@ void app_main(void)
         return;
     }
 
+    const float accel_lsb_per_g = bmi270_get_accel_lsb(s_bmi270);
+    if (accel_lsb_per_g <= 0.0F) {
+        ESP_LOGE(TAG, "BMI270 acceleration scale is invalid");
+        cleanup_sensor_bus();
+        return;
+    }
+    const uint16_t anymotion_threshold =
+        anymotion_threshold_from_idle_lsb(IDLE_MAX_AXIS_DELTA_LSB, accel_lsb_per_g);
     const bmi270_error_t anymotion_result =
-        bmi270_enable_anymotion_interrupt(s_bmi270, s_power, BMI270_ANYMOTION_THRESHOLD_DEFAULT);
+        bmi270_enable_anymotion_interrupt(s_bmi270, s_power, anymotion_threshold,
+                                          ANYMOTION_DURATION_SAMPLES);
     if (anymotion_result != BMI270_OK) {
         ESP_LOGE(TAG, "BMI270 any-motion setup failed: %d", anymotion_result);
         cleanup_sensor_bus();
@@ -356,7 +378,12 @@ void app_main(void)
         cleanup_sensor_bus();
         return;
     }
-    recorder_result = data_recorder_start(s_bmi270, &pool, s_session_controller, button_press_queue);
+    const data_recorder_config_t recorder_config = {
+        .max_axis_delta_lsb = IDLE_MAX_AXIS_DELTA_LSB,
+        .duration_seconds = IDLE_DURATION_SECONDS,
+    };
+    recorder_result = data_recorder_start(s_bmi270, &pool, s_session_controller,
+                                          button_press_queue, &recorder_config);
     if (recorder_result != DATA_RECORDER_OK) {
         ESP_LOGE(TAG, "Recorder startup failed: %d", recorder_result);
         cleanup_sensor_bus();

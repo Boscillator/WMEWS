@@ -52,7 +52,7 @@ static bool add_features(cJSON *record, const imu_feature_vector_t *features)
            cJSON_AddNumberToObject(object, "max_axis_delta_lsb", features->max_axis_delta_lsb) != NULL;
 }
 
-static bool add_data_format(cJSON *record)
+static bool add_data_format(cJSON *record, const uploader_json_metadata_t *metadata)
 {
     cJSON *const format = cJSON_AddObjectToObject(record, "data_format");
     cJSON *const raw = format == NULL ? NULL : cJSON_AddObjectToObject(format, "raw");
@@ -68,17 +68,17 @@ static bool add_data_format(cJSON *record)
            cJSON_AddStringToObject(x, "unit", "lsb") != NULL &&
            cJSON_AddStringToObject(y, "unit", "lsb") != NULL &&
            cJSON_AddStringToObject(z, "unit", "lsb") != NULL &&
-           cJSON_AddNumberToObject(x, "accelerometer_range_g", 8) != NULL &&
-           cJSON_AddNumberToObject(y, "accelerometer_range_g", 8) != NULL &&
-           cJSON_AddNumberToObject(z, "accelerometer_range_g", 8) != NULL &&
-           cJSON_AddNumberToObject(x, "lsb_per_g", 4096) != NULL &&
-           cJSON_AddNumberToObject(y, "lsb_per_g", 4096) != NULL &&
-           cJSON_AddNumberToObject(z, "lsb_per_g", 4096) != NULL &&
+           cJSON_AddNumberToObject(x, "accelerometer_range_g", metadata->accel_range_g) != NULL &&
+           cJSON_AddNumberToObject(y, "accelerometer_range_g", metadata->accel_range_g) != NULL &&
+           cJSON_AddNumberToObject(z, "accelerometer_range_g", metadata->accel_range_g) != NULL &&
+           cJSON_AddNumberToObject(x, "lsb_per_g", metadata->accel_lsb_per_g) != NULL &&
+           cJSON_AddNumberToObject(y, "lsb_per_g", metadata->accel_lsb_per_g) != NULL &&
+           cJSON_AddNumberToObject(z, "lsb_per_g", metadata->accel_lsb_per_g) != NULL &&
            cJSON_AddStringToObject(features, "mean_acceleration_unit", "lsb") != NULL &&
            cJSON_AddStringToObject(features, "mean_square_acceleration_unit", "lsb2") != NULL &&
            cJSON_AddStringToObject(features, "max_axis_delta_unit", "lsb") != NULL &&
-           cJSON_AddNumberToObject(features, "accelerometer_range_g", 8) != NULL &&
-           cJSON_AddNumberToObject(features, "lsb_per_g", 4096) != NULL;
+           cJSON_AddNumberToObject(features, "accelerometer_range_g", metadata->accel_range_g) != NULL &&
+           cJSON_AddNumberToObject(features, "lsb_per_g", metadata->accel_lsb_per_g) != NULL;
 }
 
 static bool add_snapshot(cJSON *record, const uploader_json_metadata_t *metadata)
@@ -120,7 +120,8 @@ uploader_json_error_t uploader_json_emit_header(const uploader_json_metadata_t *
                                                 uploader_json_writer_t writer, void *writer_context)
 {
     if (metadata == NULL || metadata->start_time == NULL || metadata->firmware_version == NULL ||
-        metadata->features == NULL || writer == NULL) {
+        metadata->features == NULL || metadata->accel_range_g == 0U ||
+        metadata->accel_lsb_per_g == 0U || writer == NULL) {
         ESP_LOGE(TAG, "Header failed: invalid metadata or writer");
         return UPLOADER_JSON_ERR_INVALID_ARGUMENT;
     }
@@ -132,7 +133,8 @@ uploader_json_error_t uploader_json_emit_header(const uploader_json_metadata_t *
         (metadata->button_pressed_at != NULL &&
          cJSON_AddStringToObject(record, "button_pressed_at", metadata->button_pressed_at) == NULL) ||
         (metadata->button_pressed_at == NULL && cJSON_AddNullToObject(record, "button_pressed_at") == NULL) ||
-        !add_features(record, metadata->features) || !add_data_format(record) || !add_snapshot(record, metadata)) {
+        !add_features(record, metadata->features) || !add_data_format(record, metadata) ||
+        !add_snapshot(record, metadata)) {
         ESP_LOGE(TAG, "Header failed: could not allocate JSON record");
         cJSON_Delete(record);
         return UPLOADER_JSON_ERR_ALLOCATION;

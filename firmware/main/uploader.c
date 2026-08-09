@@ -180,7 +180,8 @@ static void uploader_task(void *argument)
         }
 
         if (window.samples == NULL || window.count == 0U || window.count > window.capacity ||
-            window.sample_rate_hz == 0U || !window.features_valid ||
+            window.sample_rate_hz == 0U || window.accel_range_g == 0U ||
+            window.accel_lsb_per_g == 0U || !window.features_valid ||
             window.features.sample_count != window.count || window.start_time == (time_t)-1 ||
             window.end_time == (time_t)-1) {
             ESP_LOGE(TAG,
@@ -209,6 +210,8 @@ static void uploader_task(void *argument)
             .start_time = start_time,
             .button_pressed_at = window.button_pressed_at == (time_t)-1 ? NULL : button_pressed_at,
             .sample_rate_hz = window.sample_rate_hz,
+            .accel_range_g = window.accel_range_g,
+            .accel_lsb_per_g = window.accel_lsb_per_g,
             .features = &window.features,
         };
         const capture_metadata_error_t metadata_result =

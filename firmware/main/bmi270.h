@@ -9,11 +9,14 @@
 #define BMI270_I2C_CLOCK_HZ_DEFAULT 400000U
 #define BMI270_MIN_SAMPLE_RATE_HZ 25U
 #define BMI270_MAX_SAMPLE_RATE_HZ 1600U
-#define BMI270_ANYMOTION_THRESHOLD_DEFAULT 64U
 #define BMI270_ANYMOTION_THRESHOLD_MAX 0x7FFU
+#define BMI270_ANYMOTION_DURATION_MAX 0x1FFFU
+#define BMI270_ANYMOTION_SAMPLE_RATE_HZ 50U
+#define BMI270_ANYMOTION_THRESHOLD_MG_PER_LSB 0.48F
 #define BMI270_DEFAULT_CONFIG(bus_) \
     { .bus = (bus_), .i2c_address = BMI270_I2C_ADDRESS_DEFAULT, \
-      .i2c_clock_hz = BMI270_I2C_CLOCK_HZ_DEFAULT, .sample_rate_hz = 100U }
+      .i2c_clock_hz = BMI270_I2C_CLOCK_HZ_DEFAULT, .sample_rate_hz = 100U, \
+      .accel_range = BMI270_ACCEL_RANGE_2G }
 
 typedef enum {
     BMI270_OK = 0,
@@ -27,11 +30,20 @@ typedef enum {
     BMI270_ERR_TIMEOUT,
 } bmi270_error_t;
 
+/** Supported full-scale accelerometer ranges. */
+typedef enum {
+    BMI270_ACCEL_RANGE_2G = 2U,
+    BMI270_ACCEL_RANGE_4G = 4U,
+    BMI270_ACCEL_RANGE_8G = 8U,
+    BMI270_ACCEL_RANGE_16G = 16U,
+} bmi270_accel_range_t;
+
 typedef struct {
     i2c_master_bus_handle_t bus; /**< Borrowed application-owned I2C bus. */
     uint8_t i2c_address;         /**< 7-bit BMI270 address. */
     uint32_t i2c_clock_hz;
     uint32_t sample_rate_hz;
+    bmi270_accel_range_t accel_range;
 } bmi270_config_t;
 
 typedef uint32_t bmi270_data_flags_t;
@@ -44,8 +56,8 @@ enum {
 };
 
 /** Raw BMI270 sample. Sensor time is the wrapping 24-bit, 39.0625 us/tick counter.
- * Acceleration is ±8 g (4096 LSB/g), gyro is ±2000 dps (16.384 LSB/dps), and
- * valid temperature converts as 23 C + raw / 512. */
+ * Acceleration scaling is selected by `bmi270_config_t.accel_range`; gyro is
+ * ±2000 dps (16.384 LSB/dps), and valid temperature converts as 23 C + raw / 512. */
 typedef struct {
     uint32_t sensor_time;
     int16_t accel_x;
@@ -65,16 +77,23 @@ typedef struct power_handle power_handle_t;
 uint32_t bmi270_get_sample_rate_hz(const bmi270_handle_t *handle);
 /** Return the exact integer sensor-time interval in microseconds, or zero unless live. */
 uint32_t bmi270_get_sensor_time_dt_us(const bmi270_handle_t *handle);
-float bmi270_get_gyro_lsb(const bmi270_handle_t *handle);
+/** Return the configured full-scale accelerometer range in g, or zero unless live. */
+uint8_t bmi270_get_accel_range_g(const bmi270_handle_t *handle);
+/** Return the configured accelerometer scale in LSB/g, or zero unless live. */
 float bmi270_get_accel_lsb(const bmi270_handle_t *handle);
+/** Return the fixed gyro scale in LSB/dps, or zero unless live. */
+float bmi270_get_gyro_lsb(const bmi270_handle_t *handle);
+/** Return the fixed temperature scale in LSB/C, or zero unless live. */
 float bmi270_get_temperature_lsb(const bmi270_handle_t *handle);
 
 /** Enable all-axis any-motion detection and arm PMIC GPIO4 for its active-low INT1 output.
- * threshold is in BMI270 any-motion feature units and must not exceed
- * BMI270_ANYMOTION_THRESHOLD_MAX. */
+ * `threshold` is in BMI270 any-motion feature units and `duration_samples` is
+ * in BMI270_ANYMOTION_SAMPLE_RATE_HZ samples. Both values must not exceed
+ * their corresponding BMI270_ANYMOTION_*_MAX limit. */
 bmi270_error_t bmi270_enable_anymotion_interrupt(bmi270_handle_t *handle,
                                                   power_handle_t *power,
-                                                  uint16_t threshold);
+                                                  uint16_t threshold,
+                                                  uint16_t duration_samples);
 /** Disarm PMIC GPIO4, then remove the any-motion INT1 mapping and disable the feature. */
 bmi270_error_t bmi270_disable_anymotion_interrupt(bmi270_handle_t *handle,
                                                    power_handle_t *power);

@@ -122,9 +122,11 @@ For a bench check, boot the device, press KEY2 and observe PMIC shutdown, then
 move the device enough to trigger any-motion. It should boot again and report
 the external-GPIO motion-candidate wake reason.
 
-The default threshold is 64 BMI270 any-motion feature units; valid thresholds
-are 0 through 2047. Any-motion always monitors the X, Y, and Z axes, using the
-BMI270 hardware default duration of five 50 Hz samples (100 ms). The driver
+The application derives its any-motion threshold from the idle detector's raw
+LSB threshold, preserving the physical magnitude across accelerometer ranges;
+at the default ±2 g range it uses 10 feature units (4.8 mg). Valid thresholds
+are 0 through 2047. Any-motion always monitors the X, Y, and Z axes for three
+50 Hz samples (60 ms). The driver
 configures INT1 as active-low push-pull and maps its any-motion output to
 M5PM1 GPIO4, which the PMIC arms for falling-edge wake with a pull-up. Call
 `bmi270_disable_anymotion_interrupt(imu, power)` before closing either driver
@@ -151,8 +153,9 @@ accelerometer values, and `delta_lsb` contains signed differences from the
 immediately previous sample on each axis, including samples that are not
 printed. The first record after initialization or reinitialization is marked
 `first=1` and reports `delta_lsb=(n/a,n/a,n/a)`.
-The driver is configured for ±8 g, where 4096 LSB equals 1 g; therefore 1 LSB
-is approximately 0.244 mg.
+The default driver configuration is ±2 g, where 16384 LSB equals 1 g;
+therefore 1 LSB is approximately 0.061 mg. Other supported ranges report
+their own scale in the capture metadata.
 
 The any-motion feature compares an acceleration slope against its programmed
 threshold and requires the condition to hold for a configured consecutive
