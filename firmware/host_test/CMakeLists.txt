@@ -5,7 +5,9 @@ project(wmews_host_tests C)
 set(IDF_PATH "${CMAKE_CURRENT_LIST_DIR}/../../esp-idf")
 
 add_executable(wmews_host_tests
-    "test_dummy.c"
+    "test_main.c"
+    "test_idle_detector.c"
+    "test_feature_pipeline.c"
     "../main/idle_detector.c"
     "../main/feature_pipeline.c"
     "${IDF_PATH}/components/unity/unity/src/unity.c")

@@ -21,4 +21,7 @@
 - This is a battery powered device
 - Use const whenever possible
 - Write modern C11/C23
+- For pure-logic module, write unit tests in `host_tests`
+- Never write unit tests for drivers or the that directly touches hardware, only modules that don't rely on hardware
+- Do structure code so that has much as reasonable can be tested
 
