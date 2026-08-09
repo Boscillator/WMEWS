@@ -353,7 +353,7 @@ def _(agg, np, pl, plt, timedelta):
     segments = [
         segment
         for segment in segments
-        if segment["t"].max() - segment["t"].min() >= timedelta(minutes=30)
+        if segment["t"].max() - segment["t"].min() >= timedelta(minutes=20)
     ]
 
     for s in segments:
