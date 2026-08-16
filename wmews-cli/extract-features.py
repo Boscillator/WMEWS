@@ -17,6 +17,8 @@ from scipy import signal
 
 # A gap strictly larger than this between consecutive samples starts a new run.
 RUN_GAP = timedelta(seconds=30)
+REAL_CYCLE_MIN_DURATION = timedelta(minutes=20)
+UNBALANCED_COVARIANCE_TRACE_G2 = 0.004
 DC_BLOCK_CUTOFF_HZ = 0.5
 DC_BLOCK_ORDER = 2
 ACCELERATION_COLUMNS = ("x_g", "y_g", "z_g")
@@ -395,18 +397,90 @@ def summary_features_by_chunk(data: pl.DataFrame) -> pl.DataFrame:
     )
 
 
-def generate_feature_dataframe(raw: pl.DataFrame) -> pl.DataFrame:
-    """Filter raw acceleration and return one feature record per capture."""
+def annotate_unbalanced_samples(features: pl.DataFrame) -> pl.DataFrame:
+    """Label chronologically ordered capture features relative to first unbalance."""
+    required_columns = {
+        "capture_first_sample_time",
+        "covariance_trace_g2",
+        "real_cycle",
+    }
+    missing_columns = required_columns - set(features.columns)
+    if missing_columns:
+        raise ValueError(
+            f"Features are missing required columns: {', '.join(sorted(missing_columns))}"
+        )
+
+    first_unbalanced_index = (
+        pl.when(pl.col("_threshold_exceeded"))
+        .then(pl.col("_sample_index"))
+        .otherwise(pl.lit(None, pl.UInt32))
+        .min()
+    )
+    return (
+        features.with_row_index("_sample_index")
+        .with_columns(
+            (pl.col("covariance_trace_g2") > UNBALANCED_COVARIANCE_TRACE_G2).alias(
+                "_threshold_exceeded"
+            )
+        )
+        .with_columns(
+            first_unbalanced_index.alias("_first_unbalanced_index"),
+        )
+        .with_columns(
+            (
+                pl.col("real_cycle")
+                & pl.col("_first_unbalanced_index").is_not_null()
+            ).alias("_run_unbalanced"),
+            pl.col("capture_first_sample_time")
+            .filter(pl.col("_sample_index") == pl.col("_first_unbalanced_index"))
+            .first()
+            .alias("_first_unbalanced_time"),
+        )
+        .with_columns(
+            (
+                pl.col("_run_unbalanced")
+                & (pl.col("_sample_index") < pl.col("_first_unbalanced_index"))
+            ).alias("label"),
+            pl.when(pl.col("_run_unbalanced"))
+            .then(pl.col("_sample_index") < pl.col("_first_unbalanced_index"))
+            .otherwise(True)
+            .alias("included"),
+        )
+        .with_columns(
+            pl.when(pl.col("label") & pl.col("included"))
+            .then(
+                pl.col("_first_unbalanced_time")
+                - pl.col("capture_first_sample_time")
+            )
+            .otherwise(pl.lit(None, pl.Duration("us")))
+            .alias("time_until_unbalanced")
+        )
+        .drop(
+            "_sample_index",
+            "_threshold_exceeded",
+            "_first_unbalanced_index",
+            "_run_unbalanced",
+            "_first_unbalanced_time",
+        )
+    )
+
+
+def generate_feature_dataframe(raw: pl.DataFrame, run_index: int) -> pl.DataFrame:
+    """Filter raw acceleration and return annotated feature records per capture."""
+    real_cycle = raw["t"][-1] - raw["t"][0] > REAL_CYCLE_MIN_DURATION
     highpassed_data = dc_block_filter_acceleration(raw)
-    features = summary_features_by_chunk(highpassed_data)
-    return features
+    features = summary_features_by_chunk(highpassed_data).with_columns(
+        pl.lit(run_index, pl.UInt32).alias("run_index"),
+        pl.lit(real_cycle, pl.Boolean).alias("real_cycle"),
+    )
+    return annotate_unbalanced_samples(features)
 
 
 def main() -> None:
     args = parse_args()
     args.out.mkdir(parents=True, exist_ok=True)
     for run_index, run in enumerate(load_enriched_runs(args.input), start=1):
-        features = generate_feature_dataframe(run)
+        features = generate_feature_dataframe(run, run_index)
         output_path = args.out / f"features-run-{run_index:04d}.parquet"
         features.write_parquet(output_path)
         print(f"Run {run_index}: wrote {len(features)} feature rows to {output_path}")
