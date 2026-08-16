@@ -300,8 +300,7 @@ def main() -> None:
     for run_index, run in enumerate(load_enriched_runs(args.input), start=1):
         times = run["t"]
         print(
-            f"Run {run_index}: {len(run)} samples, "
-            f"{times.min():%Y-%m-%d %H:%M:%S} -> {times.max():%Y-%m-%d %H:%M:%S} UTC"
+            f"Run {run_index}: {len(run)} samples: \n {repr(run)}"
         )
 
 
