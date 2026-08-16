@@ -1,12 +1,11 @@
 """Convert raw Washcap accelerometer samples to engineering units.
 
-Streams input file by file and capture by capture, yielding one DataFrame
-per "run" (a period of continuous data with no gap > 30s), so memory usage
-stays bounded by a single run instead of the whole dataset.
+Reads input file by file and yields one DataFrame per "run" (a period of
+continuous data with no gap > 30s). Each .washcap file is parsed natively by
+Polars before its captures are yielded.
 """
 
 import argparse
-import json
 from collections.abc import Iterator
 from dataclasses import dataclass
 from datetime import datetime, timedelta
@@ -37,6 +36,46 @@ OUTPUT_SCHEMA: dict[str, Any] = {
     "device_base_mac": pl.String,
     "accelerometer_range_g": pl.Int64,
     "lsb_per_g": pl.Int64,
+}
+
+# Parse only fields needed to decode samples or produce the output. Supplying a
+# schema also prevents Polars from spending time inferring unused header fields.
+_RAW_TIME_SCHEMA = pl.Struct(
+    {"tick_duration_us": pl.Float64, "wrap_ticks": pl.Int64}
+)
+_RAW_AXIS_SCHEMA = pl.Struct(
+    {"accelerometer_range_g": pl.Int64, "lsb_per_g": pl.Int64}
+)
+WASHCAP_SCHEMA: dict[str, Any] = {
+    "start_time": pl.String,
+    "button_pressed_at": pl.String,
+    "firmware_version": pl.String,
+    "sample_rate_hz": pl.Int64,
+    "data_format": pl.Struct(
+        {
+            "raw": pl.Struct(
+                {
+                    "t": _RAW_TIME_SCHEMA,
+                    "x": _RAW_AXIS_SCHEMA,
+                    "y": _RAW_AXIS_SCHEMA,
+                    "z": _RAW_AXIS_SCHEMA,
+                }
+            )
+        }
+    ),
+    "battery": pl.Struct({"millivolts": pl.Int64, "read_ok": pl.Boolean}),
+    "device": pl.Struct(
+        {
+            "target": pl.String,
+            "model": pl.Int64,
+            "revision": pl.Int64,
+            "base_mac": pl.String,
+        }
+    ),
+    "t": pl.Int64,
+    "x": pl.Int64,
+    "y": pl.Int64,
+    "z": pl.Int64,
 }
 
 
@@ -135,14 +174,10 @@ def parse_capture_metadata(row: dict[str, Any]) -> CaptureMetadata:
 
 
 def decode_capture(
-    header: dict[str, Any], cols: dict[str, list[int]], capture_id: int
+    header: dict[str, Any], samples: pl.DataFrame, capture_id: int
 ) -> pl.DataFrame:
     """Decode one capture's raw samples into the output schema using polars."""
     meta = parse_capture_metadata(header)
-    samples = pl.DataFrame(
-        {"t": cols["t"], "x": cols["x"], "y": cols["y"], "z": cols["z"]},
-        schema={"t": pl.Int64, "x": pl.Int64, "y": pl.Int64, "z": pl.Int64},
-    )
     if not samples["t"].is_between(0, meta.wrap_ticks - 1).all():
         raise ValueError(
             f"Capture {capture_id} has ticks outside [0, {meta.wrap_ticks})"
@@ -203,53 +238,27 @@ def decode_capture(
 def iter_capture_frames(path: Path, first_capture_id: int) -> Iterator[pl.DataFrame]:
     """Decode one .washcap file, yielding one DataFrame per capture.
 
-    Only one capture's samples are held in memory at a time; each yielded
-    DataFrame is independent of the file handle and prior captures.
+    Polars reads one file at a time; each yielded frame is independent of the
+    file handle and prior captures.
     """
-    header: dict[str, Any] | None = None
-    cols: dict[str, list[int]] | None = None
+    records = pl.read_ndjson(path, schema=WASHCAP_SCHEMA)
+    records = records.with_columns(
+        pl.col("start_time").is_not_null().cast(pl.UInt32).cum_sum().alias("_capture")
+    )
+    headers = {
+        row["_capture"]: row
+        for row in records.filter(pl.col("start_time").is_not_null()).iter_rows(named=True)
+    }
+    samples = records.drop_nulls(["t", "x", "y", "z"])
     capture_id = first_capture_id
 
-    def current() -> pl.DataFrame | None:
-        nonlocal header, cols, capture_id
-        if header is None or cols is None or not cols["t"]:
-            return None
-        frame = decode_capture(header, cols, capture_id)
+    for capture in samples.partition_by("_capture", maintain_order=True):
+        capture_number = capture["_capture"][0]
+        header = headers.get(capture_number)
+        if header is None:
+            raise ValueError(f"{path.name} contains sample data before a header")
+        yield decode_capture(header, capture.drop("_capture"), capture_id)
         capture_id += 1
-        header, cols = None, None
-        return frame
-
-    with path.open("r", encoding="utf-8") as handle:
-        for row_number, line in enumerate(handle, start=1):
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                record = json.loads(line)
-            except json.JSONDecodeError:
-                continue  # skip malformed lines, as with ignore_errors=True
-            if not isinstance(record, dict):
-                continue
-
-            if record.get("start_time") is not None:
-                frame = current()
-                if frame is not None:
-                    yield frame
-                header = record
-                cols = {"t": [], "x": [], "y": [], "z": []}
-            elif all(record.get(name) is not None for name in ("t", "x", "y", "z")):
-                if header is None or cols is None:
-                    raise ValueError(
-                        f"{path.name} row {row_number} contains sample data before a header"
-                    )
-                cols["t"].append(int(record["t"]))
-                cols["x"].append(int(record["x"]))
-                cols["y"].append(int(record["y"]))
-                cols["z"].append(int(record["z"]))
-
-    frame = current()
-    if frame is not None:
-        yield frame
 
 
 def resolve_input_files(input_path: Path) -> list[Path]:

@@ -3,7 +3,9 @@
   but don't comment everything.
 
 # Python Instructions
-- Use ty for validation, dataclasses for structs, and polaris for tables
+- Use ty for validation, dataclasses for structs, and polars for tables
+- When working with more than ~15MB of data, YOU MUST use polars and polars native operations.
+  Never use heavy json.loads or for loops for processing large datasets when polars alternatives exist.
 - Keep dependencies light, but do use industry standard libraries
 
 # Terraform/Tofu instructions
