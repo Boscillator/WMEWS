@@ -26,11 +26,11 @@ def _(pl):
     )
 
     df_raw = pl.read_ndjson(
-        "s3://wmews-raw-data-7fa80758/device_id=1/*/*.washcap",
+        "s3://wmews-raw-data-7fa80758/device_id=1/date=2026-08-16/*.washcap",
         credential_provider=credentials,
+        infer_schema_length=None,
+        ignore_errors=True
     )
-
-    #df_raw = df_raw.with_columns(pl.col("start_time").str.to_date("%Y-%m-%dT%H:%M:%SZ"))
     return (df_raw,)
 
 
@@ -353,13 +353,21 @@ def _(agg, np, pl, plt, timedelta):
     segments = [
         segment
         for segment in segments
-        if segment["t"].max() - segment["t"].min() >= timedelta(minutes=20)
+        if segment["t"].max() - segment["t"].min()>= timedelta(minutes=20)
     ]
 
     for s in segments:
         plt.plot(s['t'], s['g_magnitude'])
 
-        plt.yticks(np.linspace(0, agg['g_magnitude'].max(), 10))
+        plt.yticks(np.arange(0, 0.1, 0.01))
+        plt.xlabel("Time")
+        plt.ylabel("Stdev Acceleration Magnitude (g)")
+        plt.grid()
+
+        if s['g_magnitude'].max() > 0.06:
+            plt.title("Suspected Unbalanced")
+        else:
+            plt.title("Normal Run")
 
         plt.show()
     return
