@@ -13,9 +13,13 @@ from pathlib import Path
 from typing import Any
 
 import polars as pl
+from scipy import signal
 
 # A gap strictly larger than this between consecutive samples starts a new run.
 RUN_GAP = timedelta(seconds=30)
+DC_BLOCK_CUTOFF_HZ = 0.5
+DC_BLOCK_ORDER = 2
+ACCELERATION_COLUMNS = ("x_g", "y_g", "z_g")
 
 OUTPUT_SCHEMA: dict[str, Any] = {
     "capture_id": pl.UInt32,
@@ -110,6 +114,7 @@ def parse_args() -> argparse.Namespace:
         description="Convert .washcap samples to engineering units.",
     )
     parser.add_argument("input", type=Path, help="A .washcap file or directory")
+    parser.add_argument("out", type=Path, help="Directory for extracted feature files")
     return parser.parse_args()
 
 
@@ -304,13 +309,107 @@ def load_enriched_runs(input_path: Path) -> Iterator[pl.DataFrame]:
         yield pl.concat(current_run)
 
 
+def dc_block_filter_acceleration(raw: pl.DataFrame) -> pl.DataFrame:
+    """Remove each capture's gravity/DC component with a Butterworth IIR filter.
+
+    The filter is initialized to the first sample of each axis, avoiding a
+    gravity-sized startup transient, and is never carried between captures.
+    """
+    required_columns = {"capture_id", "sample_rate_hz", *ACCELERATION_COLUMNS}
+    missing_columns = required_columns - set(raw.columns)
+    if missing_columns:
+        raise ValueError(f"Data is missing required columns: {', '.join(sorted(missing_columns))}")
+
+    filtered_captures: list[pl.DataFrame] = []
+    for capture in raw.partition_by("capture_id", maintain_order=True):
+        sample_rates = capture["sample_rate_hz"].drop_nulls().unique()
+        if sample_rates.len() != 1:
+            raise ValueError("Each capture must have exactly one sample_rate_hz")
+        sample_rate_hz = sample_rates.item()
+        if sample_rate_hz <= 2 * DC_BLOCK_CUTOFF_HZ:
+            raise ValueError(
+                f"sample_rate_hz must exceed {2 * DC_BLOCK_CUTOFF_HZ} Hz for DC blocking"
+            )
+
+        sos = signal.butter(
+            DC_BLOCK_ORDER,
+            DC_BLOCK_CUTOFF_HZ,
+            btype="highpass",
+            fs=sample_rate_hz,
+            output="sos",
+        )
+        filtered_axes: list[pl.Series] = []
+        for column in ACCELERATION_COLUMNS:
+            samples = capture[column].to_numpy()
+            initial_state = signal.sosfilt_zi(sos) * samples[0]
+            filtered_axes.append(
+                pl.Series(column, signal.sosfilt(sos, samples, zi=initial_state)[0])
+            )
+        filtered_captures.append(capture.with_columns(*filtered_axes))
+
+    return pl.concat(filtered_captures) if filtered_captures else raw
+
+
+def summary_features_by_chunk(data: pl.DataFrame) -> pl.DataFrame:
+    """Compute per-capture extrema, magnitude, and acceleration covariance features."""
+    required_columns = {"capture_id", *ACCELERATION_COLUMNS}
+    missing_columns = required_columns - set(data.columns)
+    if missing_columns:
+        raise ValueError(f"Data is missing required columns: {', '.join(sorted(missing_columns))}")
+
+    return (
+        data.with_columns(
+            (
+                pl.col("x_g").pow(2) + pl.col("y_g").pow(2) + pl.col("z_g").pow(2)
+            )
+            .sqrt()
+            .alias("magnitude_g")
+        )
+        .group_by("capture_id", maintain_order=True)
+        .agg(
+            pl.col("t").min().alias("capture_first_sample_time"),
+            pl.col("t").max().alias("capture_last_sample_time"),
+            pl.len().alias("sample_count"),
+            *(
+                expression
+                for axis in ACCELERATION_COLUMNS
+                for expression in (
+                    pl.col(axis).min().alias(f"{axis}_min"),
+                    pl.col(axis).max().alias(f"{axis}_max"),
+                )
+            ),
+            pl.col("magnitude_g").min().alias("magnitude_g_min"),
+            pl.col("magnitude_g").max().alias("magnitude_g_max"),
+            pl.col("magnitude_g").mean().alias("magnitude_g_mean"),
+            pl.col("magnitude_g").std().alias("magnitude_g_std"),
+            pl.col("x_g").var().alias("cov_xx_g2"),
+            pl.col("y_g").var().alias("cov_yy_g2"),
+            pl.col("z_g").var().alias("cov_zz_g2"),
+            pl.cov("x_g", "y_g").alias("cov_xy_g2"),
+            pl.cov("x_g", "z_g").alias("cov_xz_g2"),
+            pl.cov("y_g", "z_g").alias("cov_yz_g2"),
+            (
+                pl.col("x_g").var() + pl.col("y_g").var() + pl.col("z_g").var()
+            ).alias("covariance_trace_g2"),
+        )
+    )
+
+
+def generate_feature_dataframe(raw: pl.DataFrame) -> pl.DataFrame:
+    """Filter raw acceleration and return one feature record per capture."""
+    highpassed_data = dc_block_filter_acceleration(raw)
+    features = summary_features_by_chunk(highpassed_data)
+    return features
+
+
 def main() -> None:
     args = parse_args()
+    args.out.mkdir(parents=True, exist_ok=True)
     for run_index, run in enumerate(load_enriched_runs(args.input), start=1):
-        times = run["t"]
-        print(
-            f"Run {run_index}: {len(run)} samples: \n {repr(run)}"
-        )
+        features = generate_feature_dataframe(run)
+        output_path = args.out / f"features-run-{run_index:04d}.parquet"
+        features.write_parquet(output_path)
+        print(f"Run {run_index}: wrote {len(features)} feature rows to {output_path}")
 
 
 if __name__ == "__main__":
