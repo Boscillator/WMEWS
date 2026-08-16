@@ -3,7 +3,7 @@
   but don't comment everything.
 
 # Python Instructions
-- Use pylance for validation, dataclasses for structs, and polaris for tables
+- Use ty for validation, dataclasses for structs, and polaris for tables
 - Keep dependencies light, but do use industry standard libraries
 
 # Terraform/Tofu instructions

@@ -4,6 +4,6 @@ CLI for data processing and model training for washing machine unbalanced detect
 ## usage
 ```
 # local feature extraction
-uv run extract-features.py ../data/raw ../data/processed
+uv run python extract-features.py ../data/raw
 ```
 
