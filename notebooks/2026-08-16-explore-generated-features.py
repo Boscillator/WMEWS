@@ -35,6 +35,12 @@ def _(df, pl, plt):
         plt.legend()
         plt.grid()
         plt.show()
+    return (real,)
+
+
+@app.cell
+def _(pl, real):
+    real.filter(pl.col("label"))
     return
 
 
