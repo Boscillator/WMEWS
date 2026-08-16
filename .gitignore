@@ -7,3 +7,5 @@ firmware/config.csv.bin
 firmware/sdkconfig
 firmware/sdkconfig.old
 .cache
+
+data/
