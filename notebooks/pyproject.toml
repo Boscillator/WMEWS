@@ -8,6 +8,7 @@ dependencies = [
     "altair[all]>=6.2.2",
     "boto3>=1.43.62",
     "botocore[crt]>=1.43.62",
+    "imbalanced-learn>=0.14.2",
     "marimo>=0.23.16",
     "matplotlib>=3.11.1",
     "numpy>=2.5.1",
