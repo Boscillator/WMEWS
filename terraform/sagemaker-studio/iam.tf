@@ -109,6 +109,68 @@ data "aws_iam_policy_document" "execution" {
     resources = ["*"]
   }
 
+  # Studio assumes this role after the presigned URL has been accepted.
+  statement {
+    sid       = "CreatePresignedUrlForManagedProfile"
+    effect    = "Allow"
+    actions   = ["sagemaker:CreatePresignedDomainUrl"]
+    resources = [local.user_profile_arn]
+  }
+
+  statement {
+    sid    = "ReadManagedStudioWorkspace"
+    effect = "Allow"
+    actions = [
+      "sagemaker:DescribeApp",
+      "sagemaker:DescribeDomain",
+      "sagemaker:DescribeSpace",
+      "sagemaker:DescribeUserProfile",
+    ]
+    resources = [
+      local.domain_arn,
+      local.user_profile_arn,
+      local.space_arn,
+      "arn:aws:sagemaker:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:app/${aws_sagemaker_domain.workspace.id}/${aws_sagemaker_space.jupyter.space_name}/*",
+    ]
+  }
+
+  statement {
+    sid       = "UpdateManagedJupyterLabSpace"
+    effect    = "Allow"
+    actions   = ["sagemaker:UpdateSpace"]
+    resources = [local.space_arn]
+  }
+
+  statement {
+    sid    = "ListStudioWorkspaceResources"
+    effect = "Allow"
+    actions = [
+      "sagemaker:ListApps",
+      "sagemaker:ListDomains",
+      "sagemaker:ListImageVersions",
+      "sagemaker:ListImages",
+      "sagemaker:ListSpaces",
+      "sagemaker:ListUserProfiles",
+    ]
+    resources = ["*"]
+  }
+
+  statement {
+    sid     = "RunOnlyTheManagedJupyterLabSpace"
+    effect  = "Allow"
+    actions = ["sagemaker:CreateApp", "sagemaker:DeleteApp"]
+    resources = [
+      "arn:aws:sagemaker:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:app/${aws_sagemaker_domain.workspace.id}/${aws_sagemaker_space.jupyter.space_name}/*",
+    ]
+  }
+
+  statement {
+    sid       = "TagManagedStudioApps"
+    effect    = "Allow"
+    actions   = ["sagemaker:AddTags"]
+    resources = ["*"]
+  }
+
   statement {
     sid       = "PassOnlyThisRoleToSageMaker"
     effect    = "Allow"
