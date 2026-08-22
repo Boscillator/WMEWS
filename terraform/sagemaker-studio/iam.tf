@@ -148,6 +148,7 @@ data "aws_iam_policy_document" "execution" {
     actions = [
       "sagemaker:ListApps",
       "sagemaker:ListDomains",
+      "sagemaker:ListMlflowApps",
       "sagemaker:ListImageVersions",
       "sagemaker:ListImages",
       "sagemaker:ListSpaces",
@@ -173,9 +174,12 @@ data "aws_iam_policy_document" "execution" {
   }
 
   statement {
-    sid       = "DescribeServerlessMlflowApp"
-    effect    = "Allow"
-    actions   = ["sagemaker:DescribeMlflowApp"]
+    sid    = "AccessServerlessMlflowApp"
+    effect = "Allow"
+    actions = [
+      "sagemaker:CreatePresignedMlflowAppUrl",
+      "sagemaker:DescribeMlflowApp",
+    ]
     resources = [aws_sagemaker_mlflow_app.workspace.arn]
   }
 
