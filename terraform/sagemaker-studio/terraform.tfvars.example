@@ -1,3 +1,6 @@
+# GitHub repository permitted to push wmews-cli container images through OIDC.
+github_repository = "Boscillator/WMEWS"
+
 # Obtain this from the data-collection root:
 # tofu -chdir=terraform/data-collection output -raw raw_data_bucket_name
 raw_data_bucket_name = "wmews-raw-data-12345678"

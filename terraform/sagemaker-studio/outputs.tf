@@ -1,3 +1,13 @@
+output "wmews_cli_ecr_repository_url" {
+  description = "Private ECR repository URI for wmews-cli SageMaker images."
+  value       = aws_ecr_repository.wmews_cli.repository_url
+}
+
+output "github_actions_ecr_publisher_role_arn" {
+  description = "GitHub Actions OIDC role permitted to publish wmews-cli images."
+  value       = aws_iam_role.github_actions_ecr_publisher.arn
+}
+
 output "sagemaker_domain_id" {
   description = "ID of the SageMaker Studio domain."
   value       = aws_sagemaker_domain.workspace.id

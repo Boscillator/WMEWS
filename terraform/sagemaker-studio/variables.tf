@@ -33,6 +33,17 @@ variable "mlflow_app_name" {
   }
 }
 
+variable "github_repository" {
+  description = "GitHub owner/repository allowed to publish wmews-cli images through OIDC."
+  type        = string
+  default     = "Boscillator/WMEWS"
+
+  validation {
+    condition     = can(regex("^[^/[:space:]]+/[^/[:space:]]+$", var.github_repository))
+    error_message = "github_repository must be an owner/repository value."
+  }
+}
+
 variable "raw_data_bucket_name" {
   description = "Existing data-collection bucket to expose read-only to Studio."
   type        = string

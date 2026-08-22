@@ -2,7 +2,11 @@ name: Firmware CI
 
 on:
   push:
+    paths:
+      - "firmware/**"
   pull_request:
+    paths:
+      - "firmware/**"
 
 permissions:
   contents: read

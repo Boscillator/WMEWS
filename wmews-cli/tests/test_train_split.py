@@ -59,7 +59,9 @@ def test_split_keeps_runs_whole_and_stratifies_labels(tmp_path: Path) -> None:
     assert validation["run_index"].n_unique() == 2
     assert test.height == 0
     for split in (train, validation):
-        labels = split.group_by("run_index").agg(pl.col("label").any().alias("positive"))
+        labels = split.group_by("run_index").agg(
+            pl.col("label").any().alias("positive")
+        )
         assert labels.filter("positive").height > 0
         assert labels.filter(~pl.col("positive")).height > 0
 

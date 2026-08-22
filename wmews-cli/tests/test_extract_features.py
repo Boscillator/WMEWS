@@ -19,7 +19,9 @@ spec.loader.exec_module(extract_features)
 BASE_TIME = datetime(2026, 1, 1, tzinfo=UTC)
 
 
-def header(start_time: datetime, *, button_pressed_at: datetime | None = None) -> dict[str, Any]:
+def header(
+    start_time: datetime, *, button_pressed_at: datetime | None = None
+) -> dict[str, Any]:
     """Build the minimum valid Washcap header."""
     axis = {"accelerometer_range_g": 16, "lsb_per_g": 1000}
     return {
@@ -109,7 +111,9 @@ def test_resolve_input_files_rejects_invalid_input(
         extract_features.resolve_input_files(input_path)
 
 
-def test_load_enriched_runs_splits_gaps_and_preserves_sorted_file_order(tmp_path: Path) -> None:
+def test_load_enriched_runs_splits_gaps_and_preserves_sorted_file_order(
+    tmp_path: Path,
+) -> None:
     write_washcap(
         tmp_path / "b.washcap",
         [header(BASE_TIME + timedelta(seconds=40)), *samples(0, 1)],
@@ -180,7 +184,11 @@ def test_annotate_unbalanced_samples_labels_only_preceding_real_cycle_samples() 
 
     assert result["label"].to_list() == [True, False, False]
     assert result["included"].to_list() == [True, False, False]
-    assert result["time_until_unbalanced"].to_list() == [timedelta(minutes=1), None, None]
+    assert result["time_until_unbalanced"].to_list() == [
+        timedelta(minutes=1),
+        None,
+        None,
+    ]
 
 
 @pytest.mark.parametrize("real_cycle", [False, True])

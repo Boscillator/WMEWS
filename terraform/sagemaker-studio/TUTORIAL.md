@@ -17,7 +17,8 @@ tofu -chdir=terraform/data-collection output -raw raw_data_bucket_name
 ```
 
 Copy `terraform.tfvars.example` to ignored `terraform.tfvars` and set the raw
-bucket name, budget alert email, and `studio_access_principal_arn`. The AWS
+bucket name, budget alert email, and `studio_access_principal_arn`. Set
+`github_repository` if the default repository name is not correct. The AWS
 Budgets email subscription must be confirmed after deployment.
 
 The root uses the account's default VPC and all available default-VPC subnets.
@@ -36,6 +37,22 @@ tofu validate
 Run `tofu plan` and `tofu apply` yourself only after reviewing the result.
 This configuration deliberately uses `PublicInternetOnly` networking to avoid
 NAT gateway and interface-endpoint charges.
+
+## GitHub Actions container publishing
+
+The root creates an OIDC role restricted to the configured repository's `main`
+branch. After applying the reviewed configuration, set the
+`WMEWS_CLI_ECR_PUBLISHER_ROLE_ARN` GitHub Actions repository variable to:
+
+```bash
+tofu output -raw github_actions_ecr_publisher_role_arn
+```
+
+The CLI workflow exchanges its GitHub OIDC token for this role and then obtains
+a short-lived ECR authorization token; do not create or store long-lived AWS
+access keys in GitHub. Published images are immutable and tagged with the
+commit SHA. The repository URI is available from
+`tofu output -raw wmews_cli_ecr_repository_url`.
 
 ## Open JupyterLab
 
@@ -70,7 +87,15 @@ budget and operating convention remain important controls.
 
 ## Teardown
 
-Stop and delete any running JupyterLab app before teardown. Then, from this
-directory, run `tofu destroy` yourself after review. Destroying this root
-deletes the JupyterLab EBS data, domain home EFS data, and all artifact-bucket
-objects. It does not change the data-collection Lambda or raw-data bucket.
+Stop and delete any running JupyterLab app before teardown. The repository
+intentionally refuses to be destroyed while it contains images. Delete it and
+all of its images first:
+
+```bash
+aws ecr delete-repository --repository-name wmews-cli --force
+```
+
+Then, from this directory, run `tofu destroy` yourself after review. Destroying
+this root deletes the JupyterLab EBS data, domain home EFS data, artifact-bucket
+objects, ECR repository, and GitHub Actions OIDC role. It does not change the
+data-collection Lambda or raw-data bucket.

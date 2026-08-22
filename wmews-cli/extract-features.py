@@ -46,12 +46,8 @@ OUTPUT_SCHEMA: dict[str, Any] = {
 
 # Parse only fields needed to decode samples or produce the output. Supplying a
 # schema also prevents Polars from spending time inferring unused header fields.
-_RAW_TIME_SCHEMA = pl.Struct(
-    {"tick_duration_us": pl.Float64, "wrap_ticks": pl.Int64}
-)
-_RAW_AXIS_SCHEMA = pl.Struct(
-    {"accelerometer_range_g": pl.Int64, "lsb_per_g": pl.Int64}
-)
+_RAW_TIME_SCHEMA = pl.Struct({"tick_duration_us": pl.Float64, "wrap_ticks": pl.Int64})
+_RAW_AXIS_SCHEMA = pl.Struct({"accelerometer_range_g": pl.Int64, "lsb_per_g": pl.Int64})
 WASHCAP_SCHEMA: dict[str, Any] = {
     "start_time": pl.String,
     "button_pressed_at": pl.String,
@@ -254,7 +250,9 @@ def iter_capture_frames(path: Path, first_capture_id: int) -> Iterator[pl.DataFr
     )
     headers = {
         row["_capture"]: row
-        for row in records.filter(pl.col("start_time").is_not_null()).iter_rows(named=True)
+        for row in records.filter(pl.col("start_time").is_not_null()).iter_rows(
+            named=True
+        )
     }
     samples = records.drop_nulls(["t", "x", "y", "z"])
     capture_id = first_capture_id
@@ -320,7 +318,9 @@ def dc_block_filter_acceleration(raw: pl.DataFrame) -> pl.DataFrame:
     required_columns = {"capture_id", "sample_rate_hz", *ACCELERATION_COLUMNS}
     missing_columns = required_columns - set(raw.columns)
     if missing_columns:
-        raise ValueError(f"Data is missing required columns: {', '.join(sorted(missing_columns))}")
+        raise ValueError(
+            f"Data is missing required columns: {', '.join(sorted(missing_columns))}"
+        )
 
     filtered_captures: list[pl.DataFrame] = []
     for capture in raw.partition_by("capture_id", maintain_order=True):
@@ -357,13 +357,13 @@ def summary_features_by_chunk(data: pl.DataFrame) -> pl.DataFrame:
     required_columns = {"capture_id", *ACCELERATION_COLUMNS}
     missing_columns = required_columns - set(data.columns)
     if missing_columns:
-        raise ValueError(f"Data is missing required columns: {', '.join(sorted(missing_columns))}")
+        raise ValueError(
+            f"Data is missing required columns: {', '.join(sorted(missing_columns))}"
+        )
 
     return (
         data.with_columns(
-            (
-                pl.col("x_g").pow(2) + pl.col("y_g").pow(2) + pl.col("z_g").pow(2)
-            )
+            (pl.col("x_g").pow(2) + pl.col("y_g").pow(2) + pl.col("z_g").pow(2))
             .sqrt()
             .alias("magnitude_g")
         )
@@ -390,9 +390,9 @@ def summary_features_by_chunk(data: pl.DataFrame) -> pl.DataFrame:
             pl.cov("x_g", "y_g").alias("cov_xy_g2"),
             pl.cov("x_g", "z_g").alias("cov_xz_g2"),
             pl.cov("y_g", "z_g").alias("cov_yz_g2"),
-            (
-                pl.col("x_g").var() + pl.col("y_g").var() + pl.col("z_g").var()
-            ).alias("covariance_trace_g2"),
+            (pl.col("x_g").var() + pl.col("y_g").var() + pl.col("z_g").var()).alias(
+                "covariance_trace_g2"
+            ),
         )
     )
 
@@ -428,8 +428,7 @@ def annotate_unbalanced_samples(features: pl.DataFrame) -> pl.DataFrame:
         )
         .with_columns(
             (
-                pl.col("real_cycle")
-                & pl.col("_first_unbalanced_index").is_not_null()
+                pl.col("real_cycle") & pl.col("_first_unbalanced_index").is_not_null()
             ).alias("_run_unbalanced"),
             pl.col("capture_first_sample_time")
             .filter(pl.col("_sample_index") == pl.col("_first_unbalanced_index"))
@@ -449,8 +448,7 @@ def annotate_unbalanced_samples(features: pl.DataFrame) -> pl.DataFrame:
         .with_columns(
             pl.when(pl.col("label") & pl.col("included"))
             .then(
-                pl.col("_first_unbalanced_time")
-                - pl.col("capture_first_sample_time")
+                pl.col("_first_unbalanced_time") - pl.col("capture_first_sample_time")
             )
             .otherwise(pl.lit(None, pl.Duration("us")))
             .alias("time_until_unbalanced")
