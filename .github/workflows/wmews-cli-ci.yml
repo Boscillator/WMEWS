@@ -55,6 +55,6 @@ jobs:
         with:
           context: wmews-cli
           push: ${{ github.event_name == 'push' }}
-          tags: ${{ github.event_name == 'push' && format('{0}/wmews-cli:sha-{1}', steps.login-ecr.outputs.registry, github.sha) || 'wmews-cli:ci' }}
+          tags: ${{ github.event_name == 'push' && format('{0}/wmews-cli:sha-{1},{0}/wmews-cli:latest', steps.login-ecr.outputs.registry, github.sha) || 'wmews-cli:ci' }}
           cache-from: type=gha
           cache-to: type=gha,mode=max

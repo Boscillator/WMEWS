@@ -1,6 +1,6 @@
 resource "aws_ecr_repository" "wmews_cli" {
   name                 = "wmews-cli"
-  image_tag_mutability = "IMMUTABLE"
+  image_tag_mutability = "MUTABLE"
 
   image_scanning_configuration {
     scan_on_push = true
@@ -55,6 +55,7 @@ data "aws_iam_policy_document" "github_actions_ecr_publisher" {
     effect = "Allow"
     actions = [
       "ecr:BatchCheckLayerAvailability",
+      "ecr:BatchGetImage",
       "ecr:CompleteLayerUpload",
       "ecr:InitiateLayerUpload",
       "ecr:PutImage",
