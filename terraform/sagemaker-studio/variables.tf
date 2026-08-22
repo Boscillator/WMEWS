@@ -22,6 +22,17 @@ variable "space_name" {
   default     = "wmews-jupyter"
 }
 
+variable "mlflow_app_name" {
+  description = "Name of the SageMaker serverless MLflow app."
+  type        = string
+  default     = "wmews-mlflow"
+
+  validation {
+    condition     = can(regex("^[A-Za-z0-9]([A-Za-z0-9-]{0,254}[A-Za-z0-9])?$", var.mlflow_app_name))
+    error_message = "mlflow_app_name must be 1-256 alphanumeric or hyphen characters and start and end with an alphanumeric character."
+  }
+}
+
 variable "raw_data_bucket_name" {
   description = "Existing data-collection bucket to expose read-only to Studio."
   type        = string

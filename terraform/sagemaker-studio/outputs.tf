@@ -33,6 +33,16 @@ output "artifact_bucket_name" {
   value       = aws_s3_bucket.artifacts.bucket
 }
 
+output "mlflow_app_arn" {
+  description = "ARN of the SageMaker serverless MLflow app."
+  value       = aws_sagemaker_mlflow_app.workspace.arn
+}
+
+output "mlflow_tracking_uri" {
+  description = "MLflow tracking URI for the SageMaker serverless MLflow app."
+  value       = aws_sagemaker_mlflow_app.workspace.arn
+}
+
 output "raw_data_bucket_name" {
   description = "Read-only raw-data bucket supplied to this root."
   value       = var.raw_data_bucket_name

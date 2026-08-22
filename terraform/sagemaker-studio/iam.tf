@@ -129,6 +129,7 @@ data "aws_iam_policy_document" "execution" {
     resources = [
       local.domain_arn,
       local.user_profile_arn,
+      local.user_profile_app_arn,
       local.space_arn,
       "arn:aws:sagemaker:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:app/${aws_sagemaker_domain.workspace.id}/${aws_sagemaker_space.jupyter.space_name}/*",
     ]
@@ -172,6 +173,20 @@ data "aws_iam_policy_document" "execution" {
   }
 
   statement {
+    sid       = "DescribeServerlessMlflowApp"
+    effect    = "Allow"
+    actions   = ["sagemaker:DescribeMlflowApp"]
+    resources = [aws_sagemaker_mlflow_app.workspace.arn]
+  }
+
+  statement {
+    sid       = "UseServerlessMlflowApi"
+    effect    = "Allow"
+    actions   = ["sagemaker-mlflow:*"]
+    resources = [aws_sagemaker_mlflow_app.workspace.arn]
+  }
+
+  statement {
     sid       = "PassOnlyThisRoleToSageMaker"
     effect    = "Allow"
     actions   = ["iam:PassRole"]
@@ -189,6 +204,52 @@ resource "aws_iam_role_policy" "execution" {
   name   = "${var.domain_name}-execution"
   role   = aws_iam_role.execution.id
   policy = data.aws_iam_policy_document.execution.json
+}
+
+data "aws_iam_policy_document" "mlflow_app" {
+  statement {
+    sid       = "ListMlflowArtifacts"
+    effect    = "Allow"
+    actions   = ["s3:ListBucket"]
+    resources = [aws_s3_bucket.artifacts.arn]
+
+    condition {
+      test     = "StringLike"
+      variable = "s3:prefix"
+      values   = ["mlflow/*"]
+    }
+  }
+
+  statement {
+    sid       = "LocateArtifactBucket"
+    effect    = "Allow"
+    actions   = ["s3:GetBucketLocation"]
+    resources = [aws_s3_bucket.artifacts.arn]
+  }
+
+  statement {
+    sid    = "ManageMlflowArtifacts"
+    effect = "Allow"
+    actions = [
+      "s3:AbortMultipartUpload",
+      "s3:DeleteObject",
+      "s3:GetObject",
+      "s3:ListMultipartUploadParts",
+      "s3:PutObject",
+    ]
+    resources = ["${aws_s3_bucket.artifacts.arn}/mlflow/*"]
+  }
+}
+
+resource "aws_iam_role" "mlflow_app" {
+  name               = "${var.domain_name}-mlflow"
+  assume_role_policy = data.aws_iam_policy_document.sagemaker_assume_role.json
+}
+
+resource "aws_iam_role_policy" "mlflow_app" {
+  name   = "${var.domain_name}-mlflow"
+  role   = aws_iam_role.mlflow_app.id
+  policy = data.aws_iam_policy_document.mlflow_app.json
 }
 
 data "aws_iam_policy_document" "studio_access_assume_role" {

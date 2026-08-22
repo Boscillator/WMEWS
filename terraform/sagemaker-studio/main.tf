@@ -45,5 +45,6 @@ locals {
   training_job_arn     = "arn:aws:sagemaker:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:training-job/wmews-*"
   domain_arn           = "arn:aws:sagemaker:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:domain/${aws_sagemaker_domain.workspace.id}"
   user_profile_arn     = "arn:aws:sagemaker:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:user-profile/${aws_sagemaker_domain.workspace.id}/${aws_sagemaker_user_profile.user.user_profile_name}"
+  user_profile_app_arn = "arn:aws:sagemaker:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:app/${aws_sagemaker_domain.workspace.id}/${aws_sagemaker_user_profile.user.user_profile_name}/*"
   space_arn            = "arn:aws:sagemaker:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:space/${aws_sagemaker_domain.workspace.id}/${aws_sagemaker_space.jupyter.space_name}"
 }
