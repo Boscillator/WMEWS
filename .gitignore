@@ -1,4 +1,5 @@
 .air
+.pi
 firmware/build/
 firmware/host_test/build/
 firmware/managed_components/
